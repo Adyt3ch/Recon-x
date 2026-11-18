@@ -1,0 +1,24 @@
+[
+  {
+    "issuer_ca_id": 16418,
+    "issuer_name": "C=US, O=Let's Encrypt, CN=R3",
+    "common_name": "example.com",
+    "name_value": "example.com\n*.example.com",
+    "id": 1234567,
+    "entry_timestamp": "2026-01-10T12:00:00",
+    "not_before": "2026-01-10T12:00:00",
+    "not_after": "2026-04-10T12:00:00",
+    "serial_number": "03deadbeef"
+  },
+  {
+    "issuer_ca_id": 16418,
+    "issuer_name": "C=US, O=Let's Encrypt, CN=R3",
+    "common_name": "admin.example.com",
+    "name_value": "admin.example.com\ninternal.admin.example.com",
+    "id": 1234568,
+    "entry_timestamp": "2026-02-15T08:30:00",
+    "not_before": "2026-02-15T08:30:00",
+    "not_after": "2026-05-15T08:30:00",
+    "serial_number": "03cafebabe"
+  }
+]

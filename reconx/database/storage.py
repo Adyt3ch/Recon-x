@@ -154,8 +154,9 @@ def upsert_dns_record(
         """,
         (asset_id, scan_id, record_type, value, ttl, now),
     )
+    row = cursor.fetchone()
     db.commit()
-    return cursor.fetchone()[0]
+    return row[0]
 
 
 def upsert_http_service(
@@ -214,8 +215,9 @@ def upsert_http_service(
             now,
         ),
     )
+    row = cursor.fetchone()
     db.commit()
-    return cursor.fetchone()[0]
+    return row[0]
 
 
 def create_scan(

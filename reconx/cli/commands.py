@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import importlib.util
+import json
 import os
 import shutil
 import sys
@@ -15,17 +17,35 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from reconx.core.audit import verify_chain
 from reconx.core.config import (
     load_scope,
     load_settings,
 )
+from reconx.core.engine import ScanContext, ScanEngine
 from reconx.core.normalizer import (
     NormalizationError,
     normalize_ip,
 )
+from reconx.core.rate_limiter import AsyncRateLimiter
+from reconx.core.request_manager import RequestManager
+from reconx.core.scheduler import Task
 from reconx.core.scope import ScopeEngine
 from reconx.core.tool_runner import check_tool_version
-from reconx.database.storage import apply_migrations, get_db, list_scans
+from reconx.database.storage import (
+    apply_migrations,
+    create_scan,
+    generate_scan_id,
+    get_db,
+    get_scan,
+    list_scans,
+)
+from reconx.modules.dns import DnsModule
+from reconx.modules.http import HttpModule
+from reconx.modules.subdomains import SubdomainsModule
+from reconx.reporting.csv_report import generate_csv_report
+from reconx.reporting.json_report import generate_json_report
+from reconx.reporting.txt_report import generate_txt_report
 
 console = Console()
 
@@ -41,6 +61,12 @@ def register_commands(app: typer.Typer) -> None:
     app.add_typer(config_app, name="config")
     app.command(name="doctor", help="Check dependencies, database, and external tools on PATH.")(doctor_cmd)
     app.command(name="status", help="List scans and their execution status.")(status_cmd)
+    app.command(name="passive", help="Passive subdomain discovery with zero target traffic.")(passive_cmd)
+    app.command(name="scan", help="Run full reconnaissance pipeline (passive -> DNS -> HTTP).")(scan_cmd)
+    app.command(name="results", help="View results of a completed or paused scan.")(results_cmd)
+    app.command(name="report", help="Export scan report in JSON, TXT, or CSV format.")(report_cmd)
+    app.command(name="audit", help="Verify request audit hash chain and check scope decisions.")(audit_cmd)
+    app.command(name="resume", help="Resume an interrupted or paused scan.")(resume_cmd)
 
 
 # Default templates
@@ -490,3 +516,363 @@ def status_cmd() -> None:
         )
 
     console.print(table)
+
+
+def passive_cmd(
+    target: str = typer.Argument(..., help="Domain to passively discover subdomains for"),
+    scope_path: Path = typer.Option(Path("config/scope.yaml"), "--scope", "-s", help="Scope file"),
+    settings_path: Path = typer.Option(Path("config/settings.yaml"), "--settings", help="Settings file"),
+) -> None:
+    """Run passive subdomain discovery with zero network traffic to the target."""
+    console.print(f"[bold cyan]Starting passive discovery for {target}...[/bold cyan]")
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[yellow]Database not initialized. Running init...[/yellow]")
+        init_cmd()
+
+    db = get_db(db_path)
+    scope_cfg = load_scope(scope_path)
+    scope_engine = ScopeEngine(scope_cfg)
+    settings = load_settings(settings_path=settings_path)
+
+    scan_id = generate_scan_id(db)
+    create_scan(
+        db=db,
+        scan_id=scan_id,
+        program=scope_cfg.program,
+        profile="cautious",
+        request_budget=settings.request_control.budget.max_requests,
+    )
+
+    rate_limiter = AsyncRateLimiter(
+        requests_per_second=1.0,
+        requests_per_minute=30,
+    )
+    req_mgr = RequestManager(
+        scan_id=scan_id,
+        scope_engine=scope_engine,
+        settings=settings,
+        db=db,
+        rate_limiter=rate_limiter,
+    )
+    ctx = ScanContext(
+        scan_id=scan_id,
+        program=scope_cfg.program,
+        settings=settings,
+        scope=scope_engine,
+        requests=req_mgr,
+        db=db,
+    )
+
+    sub_mod = SubdomainsModule()
+    task = Task(scan_id=scan_id, module="subdomains", target=target)
+
+    async def _run():
+        return await sub_mod.run(ctx, task)
+
+    results = asyncio.run(_run())
+    console.print(f"[bold green]Passive discovery complete for {scan_id}. Found {len(results)} in-scope subdomains.[/bold green]")
+    for r in results:
+        console.print(f"  • {r.hostname} (sources: {', '.join(r.sources)})")
+    db.close()
+
+
+def scan_cmd(
+    target: str = typer.Argument(..., help="Target domain to scan"),
+    profile: str = typer.Option("cautious", "--profile", "-p", help="Scan profile: cautious | normal | program-custom"),
+    scope_path: Path = typer.Option(Path("config/scope.yaml"), "--scope", "-s", help="Scope file"),
+    settings_path: Path = typer.Option(Path("config/settings.yaml"), "--settings", help="Settings file"),
+    rate: float | None = typer.Option(None, "--rate", "-r", help="Requests per second"),
+    concurrency: int | None = typer.Option(None, "--concurrency", "-c", help="Concurrency"),
+    max_requests: int | None = typer.Option(None, "--max-requests", "-m", help="Request budget"),
+    confirm_rate: bool = typer.Option(False, "--confirm-rate", help="Confirm raising rate/concurrency"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Simulate scan and count requests without sending"),
+) -> None:
+    """Execute full reconnaissance pipeline: Subdomains -> DNS -> HTTP."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        init_cmd()
+
+    db = get_db(db_path)
+    scope_cfg = load_scope(scope_path)
+    scope_engine = ScopeEngine(scope_cfg)
+
+    # Check target authorization
+    t_clean = target.strip()
+    if not scope_engine.check(t_clean).allowed:
+        # If domain isn't in scope, ask or fail
+        console.print(f"[bold red]Target {target} is not permitted by {scope_path}. Add it with 'recon-x scope add' first.[/bold red]")
+        db.close()
+        raise typer.Exit(code=4)
+
+    cli_overrides = {}
+    if rate is not None:
+        cli_overrides["rate"] = rate
+    if concurrency is not None:
+        cli_overrides["concurrency"] = concurrency
+    if max_requests is not None:
+        cli_overrides["max_requests"] = max_requests
+
+    try:
+        settings = load_settings(
+            settings_path=settings_path,
+            profile_override=profile,
+            cli_overrides=cli_overrides,
+            confirm_rate=confirm_rate,
+        )
+    except ValueError as e:
+        console.print(f"[bold red]Configuration error:[/bold red] {e}")
+        db.close()
+        raise typer.Exit(code=4)
+
+    scan_id = generate_scan_id(db)
+    budget = settings.request_control.budget.max_requests
+
+    create_scan(
+        db=db,
+        scan_id=scan_id,
+        program=scope_cfg.program,
+        profile=settings.profile.value,
+        request_budget=budget,
+    )
+
+    rate_limiter = AsyncRateLimiter(
+        requests_per_second=settings.request_control.global_rate.requests_per_second,
+        requests_per_minute=settings.request_control.global_rate.requests_per_minute,
+        per_host_rps=settings.request_control.per_host.requests_per_second,
+        per_host_rpm=settings.request_control.per_host.requests_per_minute,
+        min_delay=settings.request_control.delay.minimum,
+        max_delay=settings.request_control.delay.maximum,
+    )
+
+    req_mgr = RequestManager(
+        scan_id=scan_id,
+        scope_engine=scope_engine,
+        settings=settings,
+        db=db,
+        rate_limiter=rate_limiter,
+    )
+
+    ctx = ScanContext(
+        scan_id=scan_id,
+        program=scope_cfg.program,
+        settings=settings,
+        scope=scope_engine,
+        requests=req_mgr,
+        db=db,
+        dry_run=dry_run,
+    )
+
+    modules = [SubdomainsModule(), DnsModule(), HttpModule()]
+    engine = ScanEngine(modules)
+
+    if dry_run:
+        summary = engine.dry_run(ctx)
+        console.print(Panel(f"[bold cyan]Scan Simulation Plan for {scan_id}[/bold cyan]"))
+        table = Table(title="Planned Tasks by Module")
+        table.add_column("Module", style="cyan")
+        table.add_column("Planned Tasks", style="green")
+        for m, count in summary["tasks_by_module"].items():
+            table.add_row(m, str(count))
+        console.print(table)
+        console.print(f"Estimated Total Requests: [bold]{summary['estimated_requests']}[/bold]")
+        console.print(f"Allocated Budget:         [bold]{summary['budget']}[/bold]")
+        db.close()
+        return
+
+    # Execute full pipeline
+    console.print(f"[bold green]Starting scan {scan_id} on {target} (profile: {settings.profile.value})...[/bold green]")
+
+    async def _execute():
+        # Phase 1: Subdomains
+        sub_tasks = [Task(scan_id=scan_id, module="subdomains", target=t_clean)]
+        await engine.run_scan(ctx, tasks=sub_tasks)
+
+        # Phase 2: DNS on all discovered assets
+        dns_tasks = engine.modules["dns"].plan(ctx)
+        if dns_tasks:
+            await engine.run_scan(ctx, tasks=dns_tasks)
+
+        # Phase 3: HTTP on resolved assets
+        http_tasks = engine.modules["http"].plan(ctx)
+        if http_tasks:
+            await engine.run_scan(ctx, tasks=http_tasks)
+
+    try:
+        asyncio.run(_execute())
+        console.print(f"[bold green]Scan {scan_id} finished successfully.[/bold green]")
+    except KeyboardInterrupt:
+        console.print(f"[yellow]Scan {scan_id} interrupted by user. State saved as stopped.[/yellow]")
+    finally:
+        db.close()
+
+
+def results_cmd(
+    scan_id: str = typer.Argument(..., help="Scan ID (e.g. RX-001)"),
+) -> None:
+    """View asset, DNS, and HTTP service results for a scan."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    data = generate_json_report(db, scan_id)
+    db.close()
+
+    console.print(Panel(f"[bold]Results for {scan_id} ({data['scan']['program']})[/bold]"))
+
+    # Assets table
+    table = Table(title="Assets & Confidence")
+    table.add_column("Hostname", style="cyan")
+    table.add_column("Confidence", style="bold")
+    table.add_column("Sources")
+
+    for a in data["assets"]:
+        conf = a["confidence"].upper()
+        style = "green" if conf in ("HIGH", "VERIFIED") else "yellow"
+        table.add_row(a["hostname"], f"[{style}]{conf}[/{style}]", ", ".join(a["sources"]))
+    console.print(table)
+
+    # HTTP table
+    if data["http_services"]:
+        http_table = Table(title="Live HTTP Services")
+        http_table.add_column("URL", style="blue")
+        http_table.add_column("Status", style="bold")
+        http_table.add_column("Title")
+        http_table.add_column("CDN")
+        for h in data["http_services"]:
+            http_table.add_row(
+                h["url"],
+                str(h["status_code"]),
+                h["title"] or "(no title)",
+                "Yes" if h["is_cdn"] else "No",
+            )
+        console.print(http_table)
+
+
+def report_cmd(
+    scan_id: str = typer.Option(..., "--scan-id", "-s", help="Scan ID to generate report for"),
+    format_type: str = typer.Option("json", "--format", "-f", help="Format: json | txt | csv"),
+    output_dir: Path = typer.Option(Path("reports"), "--out", "-o", help="Reports output folder"),
+) -> None:
+    """Export assessment report for submission or client review."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    target_dir = output_dir / scan_id
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    fmt = format_type.lower()
+    if fmt == "json":
+        data = generate_json_report(db, scan_id)
+        out_file = target_dir / "report.json"
+        out_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        console.print(f"[bold green]Generated JSON report:[/bold green] {out_file}")
+
+    elif fmt == "txt":
+        text_data = generate_txt_report(db, scan_id)
+        out_file = target_dir / "report.txt"
+        out_file.write_text(text_data, encoding="utf-8")
+        console.print(f"[bold green]Generated TXT report:[/bold green] {out_file}")
+
+    elif fmt == "csv":
+        for entity in ("assets", "dns", "http"):
+            csv_content = generate_csv_report(db, scan_id, entity)  # type: ignore
+            out_file = target_dir / f"{entity}.csv"
+            out_file.write_text(csv_content, encoding="utf-8")
+        console.print(f"[bold green]Generated CSV reports in:[/bold green] {target_dir}")
+    else:
+        console.print(f"[bold red]Unsupported format: {format_type}[/bold red]")
+        db.close()
+        raise typer.Exit(code=1)
+
+    db.close()
+
+
+def audit_cmd(
+    scan_id: str = typer.Argument(..., help="Scan ID to verify (e.g. RX-001)"),
+) -> None:
+    """Verify tamper-evident request log SHA-256 hash chain and audit scope decisions."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    is_valid, err = verify_chain(db, scan_id)
+
+    console.print(Panel(f"[bold]Cryptographic Audit for {scan_id}[/bold]"))
+    if is_valid:
+        console.print("  [green]✓[/green] SHA-256 Hash Chain: [bold green]VALID (No tampering detected)[/bold green]")
+    else:
+        console.print(f"  [red]✗[/red] SHA-256 Hash Chain: [bold red]BROKEN[/bold red] - {err}")
+
+    # Check for scope violations
+    cursor = db.execute(
+        "SELECT COUNT(*) FROM request_log WHERE scan_id = ? AND scope_decision LIKE 'denied%'",
+        (scan_id,),
+    )
+    denied_count = cursor.fetchone()[0]
+
+    cursor2 = db.execute(
+        "SELECT COUNT(*) FROM request_log WHERE scan_id = ?",
+        (scan_id,),
+    )
+    total_count = cursor2.fetchone()[0]
+
+    console.print(f"  [green]✓[/green] Out-of-scope requests blocked: {denied_count}")
+    console.print(f"  [green]✓[/green] Total logged target requests: {total_count}")
+    db.close()
+
+
+def resume_cmd(
+    scan_id: str = typer.Argument(..., help="Scan ID to resume"),
+    scope_path: Path = typer.Option(Path("config/scope.yaml"), "--scope", "-s", help="Scope file"),
+    settings_path: Path = typer.Option(Path("config/settings.yaml"), "--settings", help="Settings file"),
+) -> None:
+    """Resume an interrupted or paused scan."""
+    db_path = Path("data/reconx.db")
+    db = get_db(db_path)
+    scan_data = get_scan(db, scan_id)
+    if not scan_data:
+        console.print(f"[bold red]Scan {scan_id} not found.[/bold red]")
+        db.close()
+        raise typer.Exit(code=1)
+
+    scope_cfg = load_scope(scope_path)
+    scope_engine = ScopeEngine(scope_cfg)
+    settings = load_settings(settings_path=settings_path, profile_override=scan_data["profile"])
+
+    rate_limiter = AsyncRateLimiter(
+        requests_per_second=settings.request_control.global_rate.requests_per_second,
+        requests_per_minute=settings.request_control.global_rate.requests_per_minute,
+    )
+    req_mgr = RequestManager(
+        scan_id=scan_id,
+        scope_engine=scope_engine,
+        settings=settings,
+        db=db,
+        rate_limiter=rate_limiter,
+    )
+    ctx = ScanContext(
+        scan_id=scan_id,
+        program=scan_data["program"],
+        settings=settings,
+        scope=scope_engine,
+        requests=req_mgr,
+        db=db,
+    )
+
+    engine = ScanEngine([SubdomainsModule(), DnsModule(), HttpModule()])
+    console.print(f"[bold cyan]Resuming scan {scan_id}...[/bold cyan]")
+
+    async def _resume():
+        return await engine.resume_scan(scan_id, ctx)
+
+    status = asyncio.run(_resume())
+    console.print(f"[bold green]Scan {scan_id} resumed and finished with status: {status}[/bold green]")
+    db.close()

@@ -1,0 +1,5 @@
+{"host":"api.example.com","sources":["alienvault","certspotter"]}
+{"host":"mail.example.com","sources":["crtsh","dnsdumpster"]}
+{"host":"dev.example.com","sources":["shodan"]}
+{"host":"out-of-scope.example.com","sources":["threatminer"]}
+{"host":"evil.com","sources":["hackertarget"]}

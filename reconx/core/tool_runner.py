@@ -68,12 +68,7 @@ class ToolRunner:
         if target and target.strip().startswith("-"):
             raise OptionInjectionError(f"Target cannot begin with hyphen: {target!r}")
 
-        # 2. Check binary on PATH
-        tool_bin = shutil.which(tool)
-        if not tool_bin:
-            raise ToolMissing(f"Tool {tool!r} is not installed or not found on PATH")
-
-        # 3. Check required rate limit flag
+        # 2. Check required rate limit flag
         rate_flag_present = 0
         if tool.lower() in REQUIRED_RATE_FLAGS:
             expected_flags = REQUIRED_RATE_FLAGS[tool.lower()]
@@ -83,6 +78,11 @@ class ToolRunner:
                     f"Tool {tool} requires a rate limit flag from {expected_flags}, but none was provided."
                 )
             rate_flag_present = 1
+
+        # 3. Check binary on PATH
+        tool_bin = shutil.which(tool)
+        if not tool_bin:
+            raise ToolMissing(f"Tool {tool!r} is not installed or not found on PATH")
 
         cmd = [tool_bin] + args
         if target:

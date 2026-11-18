@@ -89,7 +89,15 @@ class ThreadedMockServer:
     """Threaded HTTP server that runs locally on a dynamic port."""
 
     def __init__(self, host: str = "127.0.0.1", port: int = 0):
-        self.server = http.server.ThreadingHTTPServer((host, port), MockHandler)
+        class TimeoutHTTPServer(http.server.ThreadingHTTPServer):
+            daemon_threads = True
+
+            def get_request(self):
+                sock, addr = super().get_request()
+                sock.settimeout(2.0)
+                return sock, addr
+
+        self.server = TimeoutHTTPServer((host, port), MockHandler)
         self.host, self.port = self.server.server_address
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
 
