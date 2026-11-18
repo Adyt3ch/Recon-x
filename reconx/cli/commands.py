@@ -41,8 +41,11 @@ from reconx.database.storage import (
     list_scans,
 )
 from reconx.modules.dns import DnsModule
+from reconx.modules.fingerprint import FingerprintModule
 from reconx.modules.http import HttpModule
+from reconx.modules.javascript import JavascriptModule
 from reconx.modules.subdomains import SubdomainsModule
+from reconx.modules.urls import UrlsModule
 from reconx.reporting.csv_report import generate_csv_report
 from reconx.reporting.json_report import generate_json_report
 from reconx.reporting.txt_report import generate_txt_report
@@ -663,7 +666,14 @@ def scan_cmd(
         dry_run=dry_run,
     )
 
-    modules = [SubdomainsModule(), DnsModule(), HttpModule()]
+    modules = [
+        SubdomainsModule(),
+        DnsModule(),
+        HttpModule(),
+        UrlsModule(),
+        JavascriptModule(),
+        FingerprintModule(),
+    ]
     engine = ScanEngine(modules)
 
     if dry_run:
@@ -697,6 +707,21 @@ def scan_cmd(
         http_tasks = engine.modules["http"].plan(ctx)
         if http_tasks:
             await engine.run_scan(ctx, tasks=http_tasks)
+
+        # Phase 4: URL Discovery on live services
+        url_tasks = engine.modules["urls"].plan(ctx)
+        if url_tasks:
+            await engine.run_scan(ctx, tasks=url_tasks)
+
+        # Phase 5: JavaScript analysis on live services
+        js_tasks = engine.modules["javascript"].plan(ctx)
+        if js_tasks:
+            await engine.run_scan(ctx, tasks=js_tasks)
+
+        # Phase 6: Technology fingerprinting and API discovery
+        fp_tasks = engine.modules["fingerprint"].plan(ctx)
+        if fp_tasks:
+            await engine.run_scan(ctx, tasks=fp_tasks)
 
     try:
         asyncio.run(_execute())
@@ -750,6 +775,36 @@ def results_cmd(
             )
         console.print(http_table)
 
+    # Technologies table
+    if data.get("technologies"):
+        tech_table = Table(title="Detected Technologies")
+        tech_table.add_column("Hostname", style="cyan")
+        tech_table.add_column("Technology", style="bold green")
+        tech_table.add_column("Version")
+        tech_table.add_column("Category")
+        for t in data["technologies"]:
+            tech_table.add_row(
+                t["hostname"],
+                t["name"],
+                t["version"] or "-",
+                t["category"] or "-",
+            )
+        console.print(tech_table)
+
+    # URLs table
+    if data.get("urls"):
+        urls_table = Table(title="Discovered URLs (Sample)")
+        urls_table.add_column("URL", style="blue")
+        urls_table.add_column("Category", style="yellow")
+        urls_table.add_column("Source")
+        for u in data["urls"][:15]:
+            urls_table.add_row(
+                u["url"],
+                u["category"] or "-",
+                u["source"],
+            )
+        console.print(urls_table)
+
 
 def report_cmd(
     scan_id: str = typer.Option(..., "--scan-id", "-s", help="Scan ID to generate report for"),
@@ -780,7 +835,7 @@ def report_cmd(
         console.print(f"[bold green]Generated TXT report:[/bold green] {out_file}")
 
     elif fmt == "csv":
-        for entity in ("assets", "dns", "http"):
+        for entity in ("assets", "dns", "http", "urls", "technologies"):
             csv_content = generate_csv_report(db, scan_id, entity)  # type: ignore
             out_file = target_dir / f"{entity}.csv"
             out_file.write_text(csv_content, encoding="utf-8")

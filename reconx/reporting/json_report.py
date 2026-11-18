@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -126,6 +127,87 @@ def generate_json_report(db: sqlite3.Connection, scan_id: str) -> dict[str, Any]
     )
     status_counts = {str(r["status"]): r["count"] for r in stats_cursor.fetchall()}
 
+    # Discovered URLs
+    urls_cursor = db.execute(
+        """
+        SELECT u.id, a.hostname, u.url_normalized, u.source, u.category, u.status_code, u.first_seen
+        FROM urls u
+        JOIN assets a ON u.asset_id = a.id
+        WHERE a.program = ?
+        ORDER BY u.url_normalized ASC
+        """,
+        (scan["program"],),
+    )
+    urls = [
+        {
+            "hostname": r["hostname"],
+            "url": r["url_normalized"],
+            "source": r["source"],
+            "category": r["category"],
+            "status_code": r["status_code"],
+        }
+        for r in urls_cursor.fetchall()
+    ]
+
+    # Endpoints
+    ep_cursor = db.execute(
+        """
+        SELECT method, path, parameters, first_seen
+        FROM endpoints
+        ORDER BY path ASC
+        """
+    )
+    endpoints = [
+        {
+            "method": r["method"],
+            "path": r["path"],
+            "parameters": json.loads(r["parameters"]) if r["parameters"] else [],
+        }
+        for r in ep_cursor.fetchall()
+    ]
+
+    # Technologies
+    tech_cursor = db.execute(
+        """
+        SELECT t.name, t.version, t.category, t.evidence, a.hostname
+        FROM technologies t
+        JOIN assets a ON t.asset_id = a.id
+        WHERE a.program = ?
+        ORDER BY a.hostname, t.name
+        """,
+        (scan["program"],),
+    )
+    technologies = [
+        {
+            "hostname": r["hostname"],
+            "name": r["name"],
+            "version": r["version"],
+            "category": r["category"],
+            "evidence": r["evidence"],
+        }
+        for r in tech_cursor.fetchall()
+    ]
+
+    # Secret Candidates (unverified, preview redacted)
+    sec_cursor = db.execute(
+        """
+        SELECT s.pattern, s.preview_redacted, s.entropy, s.status, j.url
+        FROM secret_candidates s
+        JOIN js_files j ON s.js_file_id = j.id
+        ORDER BY s.id ASC
+        """
+    )
+    secret_candidates = [
+        {
+            "pattern": r["pattern"],
+            "preview_redacted": r["preview_redacted"],
+            "entropy": r["entropy"],
+            "status": r["status"],
+            "source_url": r["url"],
+        }
+        for r in sec_cursor.fetchall()
+    ]
+
     return {
         "scan": {
             "id": scan["id"],
@@ -141,11 +223,19 @@ def generate_json_report(db: sqlite3.Connection, scan_id: str) -> dict[str, Any]
             "total_assets": len(assets),
             "total_dns_records": len(dns_records),
             "total_http_services": len(http_services),
+            "total_urls": len(urls),
+            "total_endpoints": len(endpoints),
+            "total_technologies": len(technologies),
+            "total_secret_candidates": len(secret_candidates),
             "total_findings": len(findings),
             "request_status_codes": status_counts,
         },
         "assets": assets,
         "dns_records": dns_records,
         "http_services": http_services,
+        "urls": urls,
+        "endpoints": endpoints,
+        "technologies": technologies,
+        "secret_candidates": secret_candidates,
         "findings": findings,
     }

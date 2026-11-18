@@ -13,7 +13,7 @@ from reconx.reporting.json_report import generate_json_report
 def generate_csv_report(
     db: sqlite3.Connection,
     scan_id: str,
-    export_type: Literal["assets", "dns", "http"] = "assets",
+    export_type: Literal["assets", "dns", "http", "urls", "technologies"] = "assets",
 ) -> str:
     """Generate RFC 4180 CSV export for selected entity type."""
     data = generate_json_report(db, scan_id)
@@ -56,6 +56,30 @@ def generate_csv_report(
                 h["content_type"] or "",
                 "yes" if h["is_cdn"] else "no",
                 h["body_hash"],
+            ])
+
+    elif export_type == "urls":
+        writer = csv.writer(output)
+        writer.writerow(["Normalized URL", "Hostname", "Category", "Source", "Status Code"])
+        for u in data.get("urls", []):
+            writer.writerow([
+                u["url"],
+                u["hostname"],
+                u["category"] or "",
+                u["source"],
+                u["status_code"] or "",
+            ])
+
+    elif export_type == "technologies":
+        writer = csv.writer(output)
+        writer.writerow(["Hostname", "Technology", "Version", "Category", "Evidence"])
+        for t in data.get("technologies", []):
+            writer.writerow([
+                t["hostname"],
+                t["name"],
+                t["version"] or "",
+                t["category"] or "",
+                t["evidence"],
             ])
 
     return output.getvalue()

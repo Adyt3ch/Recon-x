@@ -1,1 +1,165 @@
-fingerprints: []
+fingerprints:
+  # Header-based rules
+  - name: "Nginx"
+    category: "web_server"
+    type: "header"
+    header: "server"
+    pattern: "(?i)nginx(?:/([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "Apache"
+    category: "web_server"
+    type: "header"
+    header: "server"
+    pattern: "(?i)apache(?:/([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "Microsoft-IIS"
+    category: "web_server"
+    type: "header"
+    header: "server"
+    pattern: "(?i)microsoft-iis(?:/([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "Cloudflare"
+    category: "cdn"
+    type: "header"
+    header: "server"
+    pattern: "(?i)cloudflare"
+    confidence: "high"
+
+  - name: "Caddy"
+    category: "web_server"
+    type: "header"
+    header: "server"
+    pattern: "(?i)caddy"
+    confidence: "high"
+
+  - name: "PHP"
+    category: "programming_language"
+    type: "header"
+    header: "x-powered-by"
+    pattern: "(?i)php(?:/([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "ASP.NET"
+    category: "web_framework"
+    type: "header"
+    header: "x-powered-by"
+    pattern: "(?i)asp\.net"
+    confidence: "high"
+
+  - name: "Express"
+    category: "web_framework"
+    type: "header"
+    header: "x-powered-by"
+    pattern: "(?i)express"
+    confidence: "high"
+
+  - name: "Next.js"
+    category: "web_framework"
+    type: "header"
+    header: "x-powered-by"
+    pattern: "(?i)next\.js"
+    confidence: "high"
+
+  # Cookie-based rules
+  - name: "PHP"
+    category: "programming_language"
+    type: "cookie"
+    pattern: "(?i)phpsessid"
+    confidence: "medium"
+
+  - name: "Java"
+    category: "programming_language"
+    type: "cookie"
+    pattern: "(?i)jsessionid"
+    confidence: "medium"
+
+  - name: "Django"
+    category: "web_framework"
+    type: "cookie"
+    pattern: "(?i)csrftoken|sessionid"
+    confidence: "medium"
+
+  - name: "Laravel"
+    category: "web_framework"
+    type: "cookie"
+    pattern: "(?i)laravel_session"
+    confidence: "high"
+
+  - name: "Express"
+    category: "web_framework"
+    type: "cookie"
+    pattern: "(?i)connect\.sid"
+    confidence: "medium"
+
+  - name: "ASP.NET"
+    category: "web_framework"
+    type: "cookie"
+    pattern: "(?i)asp\.net_sessionid"
+    confidence: "high"
+
+  # HTML Meta Generator rules
+  - name: "WordPress"
+    category: "cms"
+    type: "meta_generator"
+    pattern: "(?i)wordpress(?: ([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "Drupal"
+    category: "cms"
+    type: "meta_generator"
+    pattern: "(?i)drupal(?: ([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "Joomla"
+    category: "cms"
+    type: "meta_generator"
+    pattern: "(?i)joomla(?:! ([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  - name: "Ghost"
+    category: "cms"
+    type: "meta_generator"
+    pattern: "(?i)ghost(?: ([0-9.]+))?"
+    version_group: 1
+    confidence: "high"
+
+  # Body / Script / Path pattern rules
+  - name: "WordPress"
+    category: "cms"
+    type: "body"
+    pattern: "/wp-content/|/wp-includes/"
+    confidence: "high"
+
+  - name: "Drupal"
+    category: "cms"
+    type: "body"
+    pattern: "/sites/default/files/|Drupal\.settings"
+    confidence: "high"
+
+  - name: "React"
+    category: "javascript_framework"
+    type: "body"
+    pattern: "data-reactroot|react-dom"
+    confidence: "medium"
+
+  - name: "Vue.js"
+    category: "javascript_framework"
+    type: "body"
+    pattern: "data-v-[a-f0-9]{8}|vue\.runtime"
+    confidence: "medium"
+
+  - name: "AngularJS"
+    category: "javascript_framework"
+    type: "body"
+    pattern: "ng-app=|ng-controller="
+    confidence: "high"

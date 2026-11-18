@@ -1,0 +1,7 @@
+https://example.com/
+https://example.com/index.html
+https://example.com/old-login
+https://example.com/docs/api
+https://example.com/api/v2/items?b=2&a=1&utm_source=twitter
+https://example.com/admin/portal
+https://out-of-scope.net/page

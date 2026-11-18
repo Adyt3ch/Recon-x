@@ -1,0 +1,6 @@
+{"timestamp":"2026-11-18T10:00:00Z","request":{"method":"GET","endpoint":"https://example.com/","tag":"form"}}
+{"timestamp":"2026-11-18T10:00:01Z","request":{"method":"GET","endpoint":"https://example.com/about","tag":"a"}}
+{"timestamp":"2026-11-18T10:00:02Z","request":{"method":"GET","endpoint":"https://example.com/login?redirect=/dashboard","tag":"a"}}
+{"timestamp":"2026-11-18T10:00:03Z","request":{"method":"GET","endpoint":"https://example.com/api/v1/users?page=1&limit=10","tag":"xhr"}}
+{"timestamp":"2026-11-18T10:00:04Z","request":{"method":"GET","endpoint":"https://evil.com/out-of-scope","tag":"a"}}
+{"timestamp":"2026-11-18T10:00:05Z","request":{"method":"GET","endpoint":"https://example.com/assets/app.js","tag":"script"}}

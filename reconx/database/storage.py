@@ -297,3 +297,134 @@ def insert_scan_event(
         (scan_id, utc_now_iso(), level, event, detail),
     )
     db.commit()
+
+
+def upsert_url(
+    db: sqlite3.Connection,
+    asset_id: int,
+    url_normalized: str,
+    source: str,
+    category: str | None = None,
+    status_code: int | None = None,
+) -> int:
+    """Upsert a discovered URL on url_normalized."""
+    now = utc_now_iso()
+    cursor = db.execute(
+        """
+        INSERT INTO urls (asset_id, url_normalized, source, category, status_code, first_seen, last_seen)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url_normalized) DO UPDATE SET
+            category = coalesce(excluded.category, urls.category),
+            status_code = coalesce(excluded.status_code, urls.status_code),
+            last_seen = excluded.last_seen
+        RETURNING id
+        """,
+        (asset_id, url_normalized, source, category, status_code, now, now),
+    )
+    row = cursor.fetchone()
+    db.commit()
+    return row[0]
+
+
+def insert_endpoint(
+    db: sqlite3.Connection,
+    url_id: int | None,
+    method: str,
+    path: str,
+    parameters: str | None = None,
+    js_file_id: int | None = None,
+) -> int:
+    """Insert an endpoint discovered from URL crawl, JS analysis, or API documentation."""
+    now = utc_now_iso()
+    cursor = db.execute(
+        """
+        INSERT INTO endpoints (url_id, method, path, parameters, js_file_id, first_seen)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (url_id, method.upper(), path, parameters, js_file_id, now),
+    )
+    endpoint_id = cursor.lastrowid
+    db.commit()
+    return endpoint_id
+
+
+def upsert_js_file(
+    db: sqlite3.Connection,
+    url: str,
+    sha256: str,
+    size: int,
+) -> tuple[int, bool]:
+    """Upsert JS file record. Returns (js_file_id, is_new_or_changed)."""
+    now = utc_now_iso()
+    cursor = db.execute("SELECT id, sha256 FROM js_files WHERE url = ?", (url,))
+    row = cursor.fetchone()
+    if row:
+        js_id = row[0]
+        old_hash = row[1]
+        is_changed = old_hash != sha256
+        db.execute(
+            """
+            UPDATE js_files SET sha256 = ?, size = ?, last_seen = ? WHERE id = ?
+            """,
+            (sha256, size, now, js_id),
+        )
+        db.commit()
+        return js_id, is_changed
+    else:
+        cursor = db.execute(
+            """
+            INSERT INTO js_files (url, sha256, size, first_seen, last_seen)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (url, sha256, size, now, now),
+        )
+        js_id = cursor.lastrowid
+        db.commit()
+        return js_id, True
+
+
+def insert_secret_candidate(
+    db: sqlite3.Connection,
+    js_file_id: int,
+    pattern: str,
+    preview_redacted: str,
+    entropy: float | None = None,
+) -> int:
+    """Record an unverified secret candidate."""
+    now = utc_now_iso()
+    cursor = db.execute(
+        """
+        INSERT INTO secret_candidates (js_file_id, pattern, preview_redacted, entropy, status, discovered_at)
+        VALUES (?, ?, ?, ?, 'unverified', ?)
+        """,
+        (js_file_id, pattern, preview_redacted, entropy, now),
+    )
+    cand_id = cursor.lastrowid
+    db.commit()
+    return cand_id
+
+
+def upsert_technology(
+    db: sqlite3.Connection,
+    asset_id: int,
+    name: str,
+    version: str | None = None,
+    category: str | None = None,
+    evidence: str = "",
+) -> int:
+    """Upsert detected technology on (asset_id, name, version)."""
+    now = utc_now_iso()
+    cursor = db.execute(
+        """
+        INSERT INTO technologies (asset_id, name, version, category, evidence, observed_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(asset_id, name, version) DO UPDATE SET
+            evidence = excluded.evidence,
+            observed_at = excluded.observed_at
+        RETURNING id
+        """,
+        (asset_id, name, version, category, evidence, now),
+    )
+    row = cursor.fetchone()
+    db.commit()
+    return row[0]

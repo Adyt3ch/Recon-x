@@ -54,6 +54,44 @@ def generate_txt_report(db: sqlite3.Connection, scan_id: str) -> str:
             lines.append(f"    Server: {h['server']}")
     lines.append("")
 
+    # Technologies section
+    lines.append("-" * 70)
+    lines.append(" DETECTED TECHNOLOGIES")
+    lines.append("-" * 70)
+    if data.get("technologies"):
+        for t in data["technologies"]:
+            ver_str = f" v{t['version']}" if t["version"] else ""
+            lines.append(f"  • {t['hostname']}: {t['name']}{ver_str} [{t['category']}]")
+    else:
+        lines.append("  (No technologies fingerprinted)")
+    lines.append("")
+
+    # URLs & Endpoints section
+    lines.append("-" * 70)
+    lines.append(" DISCOVERED URLS & ENDPOINTS")
+    lines.append("-" * 70)
+    if data.get("urls"):
+        lines.append(f"Total Discovered URLs: {len(data['urls'])}")
+        for u in data["urls"][:20]:
+            cat_str = f" [{u['category']}]" if u["category"] else ""
+            lines.append(f"  • {u['url']}{cat_str} (via {u['source']})")
+        if len(data["urls"]) > 20:
+            lines.append(f"  ... and {len(data['urls']) - 20} more URLs")
+    else:
+        lines.append("  (No URLs discovered)")
+    lines.append("")
+
+    # Secret Candidates section
+    lines.append("-" * 70)
+    lines.append(" UNVERIFIED SECRET CANDIDATES")
+    lines.append("-" * 70)
+    if data.get("secret_candidates"):
+        for s in data["secret_candidates"]:
+            lines.append(f"  • [{s['status'].upper()}] {s['pattern']}: {s['preview_redacted']} (source: {s['source_url']})")
+    else:
+        lines.append("  (No secret candidates detected)")
+    lines.append("")
+
     # Security Observations section
     lines.append("-" * 70)
     lines.append(" SECURITY OBSERVATIONS & LEADS")
