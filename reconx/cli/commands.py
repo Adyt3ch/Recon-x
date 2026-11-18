@@ -466,7 +466,7 @@ def doctor_cmd() -> None:
             ver_text = check_tool_version(tool) or "found"
             console.print(f"  [green]✓[/green] {tool}: {tool_path} ({ver_text})")
         else:
-            console.print(f"  [yellow]![/yellow] {tool}: not found on PATH (warning: features will skip on Windows)")
+            console.print(f"  [yellow]![/yellow] {tool}: not found on PATH (warning: tool-dependent tasks will be skipped)")
 
     # 5. httpx binary check
     httpx_bin = shutil.which("httpx")
