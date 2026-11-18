@@ -1,0 +1,425 @@
+================================================================================
+RECON-X CLI COMMAND REFERENCE MANUAL
+Version: 2.0.0
+================================================================================
+
+RECON-X is a lightweight, CLI-only, modular reconnaissance framework designed 
+for authorized bug bounty and VAPT work with strict scope enforcement, tamper-evident 
+audit logging, rate controls, and heuristic vulnerability intelligence.
+
+--------------------------------------------------------------------------------
+TABLE OF CONTENTS
+--------------------------------------------------------------------------------
+1. Quick Start / First Session
+2. Complete Command Index
+3. Core Reconnaissance & Discovery Commands
+4. Scope Management Subcommands (`recon-x scope ...`)
+5. Configuration Subcommands (`recon-x config ...`)
+6. Finding & Triage Lifecycle (`recon-x findings ...` & `recon-x notes ...`)
+7. Reporting & Data Export Commands (`recon-x report ...` & `recon-x export ...`)
+8. Integrity Audit & Quality Metrics (`recon-x audit ...` & `recon-x metrics ...`)
+9. Exit Codes Reference
+
+
+================================================================================
+1. QUICK START / FIRST SESSION
+================================================================================
+
+# Step 1: Initialize folders, configuration files, and SQLite database
+recon-x init
+
+# Step 2: Check tool dependencies and environment health
+recon-x doctor
+
+# Step 3: Add your authorized domain to scope
+recon-x scope add example.com
+
+# Step 4: Verify scope decisions (must allow in-scope and deny out-of-scope)
+recon-x scope check a.example.com         # Expect: ALLOWED
+recon-x scope check evil.com              # Expect: DENIED
+
+# Step 5: Run passive discovery only (zero network traffic to target)
+recon-x passive example.com
+
+# Step 6: Plan scan with dry-run (estimates request budget and tasks)
+recon-x scan example.com --profile cautious --dry-run
+
+# Step 7: Run the full reconnaissance scan with a safe request budget
+recon-x scan example.com --profile cautious --max-requests 100
+
+# Step 8: Review results, leads, and cryptographic audit log
+recon-x status
+recon-x results RX-001
+recon-x leads RX-001 --top 20
+recon-x audit RX-001
+recon-x metrics RX-001
+
+# Step 9: Export reports and testing targets
+recon-x report --scan-id RX-001 --format html
+recon-x report --scan-id RX-001 --format json
+recon-x export --scan-id RX-001 --type burp-scope --out burp.json
+
+
+================================================================================
+2. COMPLETE COMMAND INDEX
+================================================================================
+
+Top-Level Commands:
+  recon-x init                       Initialize directory structure and database
+  recon-x doctor                     Check environment, libraries, and external tools
+  recon-x status                     List all scans and execution status
+  recon-x passive <target>           Run passive discovery with zero target traffic
+  recon-x scan <target>              Run full pipeline (Passive -> DNS -> HTTP)
+  recon-x resume <scan_id>           Resume an interrupted or paused scan
+  recon-x results <scan_id>          View comprehensive findings for a scan
+  recon-x diff <scan_1> <scan_2>     Compute structural diff between two scans
+  recon-x monitor <target>           Run monitor scan and alert on newly discovered assets
+  recon-x leads <scan_id>            List prioritized investigative leads ranked by score
+  recon-x report                     Export comprehensive scan reports (HTML, JSON, TXT, CSV)
+  recon-x export                     Export targets for Burp, Nuclei, or plain lists
+  recon-x audit <scan_id>            Verify cryptographic hash chain & scope enforcement
+  recon-x metrics <scan_id>          Evaluate Section 13 quality & performance scorecard
+
+Subcommand Groups:
+  recon-x scope <subcommand>         Manage and verify in-scope/out-of-scope rules
+  recon-x config <subcommand>        Display active settings with secrets redacted
+  recon-x findings <subcommand>      Manage finding states (new -> confirmed -> fixed)
+  recon-x notes <subcommand>         Attach manual assessment notes to findings
+
+
+================================================================================
+3. CORE RECONNAISSANCE & DISCOVERY COMMANDS
+================================================================================
+
+--------------------------------------------------------------------------------
+COMMAND: init
+Description: Creates data/, config/, logs/, and reports/ folders, default YAML 
+             configurations, and initializes the SQLite schema (data/reconx.db).
+Syntax:
+  recon-x init
+
+--------------------------------------------------------------------------------
+COMMAND: doctor
+Description: Audits Python version, required Python libraries, SQLite database, 
+             and external reconnaissance tools (subfinder, katana, nuclei, gau, 
+             waybackurls, nmap, naabu).
+Syntax:
+  recon-x doctor
+
+--------------------------------------------------------------------------------
+COMMAND: status
+Description: Displays a summary table of all recorded scans, target programs, 
+             applied profiles, request budgets used, and status.
+Syntax:
+  recon-x status
+
+--------------------------------------------------------------------------------
+COMMAND: passive
+Description: Queries passive third-party intelligence sources (crt.sh, Subfinder) 
+             with ZERO network packets sent to the target domain.
+Syntax:
+  recon-x passive <target>
+
+Example:
+  recon-x passive example.com
+
+--------------------------------------------------------------------------------
+COMMAND: scan
+Description: Executes the active reconnaissance pipeline:
+             1. Passive discovery (crt.sh, subfinder)
+             2. DNS resolution (A, AAAA, CNAME, TXT, MX) & wildcard detection
+             3. Live HTTP probing (TLS, server headers, tech fingerprinting)
+             4. Web crawling (Katana/GAU/Waybackurls), JS analysis & endpoints
+             5. Security intelligence (Subdomain takeover, CORS, missing headers)
+             6. Optional opt-in checks (Port scan, Nuclei, KEV/NVD CVE mapping)
+
+Syntax:
+  recon-x scan <target> [OPTIONS]
+
+Options:
+  --profile, -p TEXT         Scan rate profile: cautious | normal | program-custom
+                             (Default: cautious)
+  --scope, -s PATH           Path to scope file (Default: config/scope.yaml)
+  --settings PATH            Path to settings file (Default: config/settings.yaml)
+  --rate, -r FLOAT           Override requests per second (lowering allowed; raising 
+                             requires --confirm-rate)
+  --concurrency, -c INT      Override concurrency limits
+  --max-requests, -m INT     Hard cap on total requests sent across the scan
+  --confirm-rate             Explicitly confirm raising request rates
+  --dry-run                  Simulate scan plan and estimate budget without sending 
+                             any network packets
+
+Examples:
+  recon-x scan example.com --dry-run
+  recon-x scan example.com --profile cautious --max-requests 100
+  recon-x scan example.com --scope config/scope.yaml --rate 2.0 --confirm-rate
+
+--------------------------------------------------------------------------------
+COMMAND: resume
+Description: Resumes an interrupted, stopped, or rate-limited scan from the exact 
+             step it left off, reusing already resolved assets and responses.
+Syntax:
+  recon-x resume <scan_id> [OPTIONS]
+
+Options:
+  --scope, -s PATH           Scope file path (Default: config/scope.yaml)
+  --settings PATH            Settings file path (Default: config/settings.yaml)
+
+Example:
+  recon-x resume RX-001
+
+--------------------------------------------------------------------------------
+COMMAND: results
+Description: Displays a formatted breakdown of a completed scan, including live 
+             assets, discovered endpoints, technologies, and observations.
+Syntax:
+  recon-x results <scan_id>
+
+Example:
+  recon-x results RX-001
+
+--------------------------------------------------------------------------------
+COMMAND: diff
+Description: Calculates a deep structural comparison between two scans:
+             - Newly discovered subdomains
+             - Removed/vanished assets
+             - New endpoints and JavaScript files
+             - Newly detected ports or technologies
+Syntax:
+  recon-x diff <scan_id_old> <scan_id_new>
+
+Example:
+  recon-x diff RX-001 RX-002
+
+--------------------------------------------------------------------------------
+COMMAND: monitor
+Description: Runs automated periodic delta recon against an existing target, 
+             verifies new assets, logs diffs, and fires webhook/console alerts.
+Syntax:
+  recon-x monitor <target> [OPTIONS]
+
+Options:
+  --profile, -p TEXT         Profile override (cautious | normal | program-custom)
+  --scope, -s PATH           Scope file path (Default: config/scope.yaml)
+
+Example:
+  recon-x monitor example.com
+
+--------------------------------------------------------------------------------
+COMMAND: leads
+Description: Runs heuristic priority scoring against all scan assets and endpoints, 
+             ranking the top attack surface leads (e.g. dev/staging portals, 
+             auth endpoints, redirect parameters, IDOR identifiers, exposed APIs).
+Syntax:
+  recon-x leads <scan_id> [OPTIONS]
+
+Options:
+  --top, -n INT              Number of top ranked leads to display (Default: 20)
+
+Example:
+  recon-x leads RX-001 --top 20
+
+
+================================================================================
+4. SCOPE MANAGEMENT SUBCOMMANDS
+================================================================================
+
+Syntax:
+  recon-x scope <subcommand>
+
+Subcommands:
+
+1. `check`:
+   Evaluates a target domain, URL, or IP against loaded scope rules and displays 
+   the exact decision (ALLOWED or DENIED) with the matching rule and reason.
+   Syntax:
+     recon-x scope check <target>
+   Example:
+     recon-x scope check api.example.com
+     recon-x scope check 169.254.169.254
+
+2. `add`:
+   Appends a target domain, wildcard, IP, or CIDR to the in-scope list in 
+   config/scope.yaml.
+   Syntax:
+     recon-x scope add <target>
+   Example:
+     recon-x scope add target.com
+     recon-x scope add "*.target.com"
+
+3. `list`:
+   Displays all active in-scope domains, IPs, CIDRs, allowed ports, and out-of-scope 
+   exclusions loaded from the active scope configuration.
+   Syntax:
+     recon-x scope list
+
+4. `import`:
+   Imports scope targets from an external list, CSV, YAML, or HackerOne export file 
+   with rigorous per-line syntax and normalization checks.
+   Syntax:
+     recon-x scope import <filepath> [OPTIONS]
+   Options:
+     --format, -f TEXT       File format: txt | csv | yaml | hackerone
+   Example:
+     recon-x scope import targets.txt --format txt
+     recon-x scope import h1_scope.csv --format hackerone
+
+
+================================================================================
+5. CONFIGURATION SUBCOMMANDS
+================================================================================
+
+Syntax:
+  recon-x config <subcommand>
+
+Subcommands:
+
+1. `show`:
+   Displays the active merged configuration (profile defaults, settings.yaml, 
+   request control limits, timeouts, backoff, and user agents) with all API keys 
+   and secrets cryptographically redacted.
+   Syntax:
+     recon-x config show
+
+
+================================================================================
+6. FINDING & TRIAGE LIFECYCLE COMMANDS
+================================================================================
+
+Manage observations, vulnerabilities, and bug bounty triage state machine:
+`new` -> `confirmed` | `false_positive` | `duplicate` -> `reported` -> `fixed`
+
+--------------------------------------------------------------------------------
+COMMAND: findings list
+Description: Lists all discovered observations, findings, and vulnerabilities 
+             recorded in the database with their current triage status.
+Syntax:
+  recon-x findings list [OPTIONS]
+
+Options:
+  --scan-id, -s TEXT         Filter findings by a specific scan ID
+
+Example:
+  recon-x findings list --scan-id RX-001
+
+--------------------------------------------------------------------------------
+COMMAND: findings set
+Description: Updates the status of a specific finding ID enforcing valid state 
+             machine transitions.
+Syntax:
+  recon-x findings set <finding_id> --status <status> [OPTIONS]
+
+Options:
+  --status TEXT              Status: confirmed | false_positive | duplicate | 
+                             reported | fixed [required]
+  --note TEXT                Optional triage or reproduction note
+
+Example:
+  recon-x findings set F-001 --status confirmed --note "Reproduced CORS origin reflection"
+  recon-x findings set F-002 --status false_positive --note "Wildcard catch-all response"
+
+--------------------------------------------------------------------------------
+COMMAND: notes add
+Description: Records manual analyst notes and research observations against a 
+             specific finding or asset.
+Syntax:
+  recon-x notes add <finding_id> <note_text>
+
+Example:
+  recon-x notes add F-001 "Parameter /redirect?url= accepts relative redirects only."
+
+
+================================================================================
+7. REPORTING & DATA EXPORT COMMANDS
+================================================================================
+
+--------------------------------------------------------------------------------
+COMMAND: report
+Description: Generates formatted scan reports or HackerOne-ready vulnerability 
+             submission markdown templates with stored evidence.
+Syntax:
+  recon-x report [OPTIONS]
+
+Options:
+  --scan-id, -s TEXT         Scan ID to generate report for [required]
+  --format, -f TEXT          Output format: html | json | txt | csv (Default: json)
+  --out, -o PATH             Directory to write reports into (Default: reports/)
+  --finding TEXT             Specific finding ID to export as vulnerability write-up
+  --template TEXT            Report template (e.g. hackerone)
+
+Examples:
+  recon-x report --scan-id RX-001 --format html
+  recon-x report --scan-id RX-001 --format json
+  recon-x report --scan-id RX-001 --format csv
+  recon-x report --scan-id RX-001 --finding F-001 --template hackerone
+
+--------------------------------------------------------------------------------
+COMMAND: export
+Description: Exports discovered reconnaissance data into target formats for 
+             external testing suites (Burp Suite, Nuclei, or plain lists).
+Syntax:
+  recon-x export [OPTIONS]
+
+Options:
+  --scan-id, -s TEXT         Scan ID to export data for [required]
+  --type, -t TEXT            Export format [required]:
+                             - hosts          : Newline-separated hostnames
+                             - urls           : Newline-separated live URLs
+                             - burp-scope     : Burp Suite JSON scope target configuration
+                             - nuclei-targets : Formatted target file for Nuclei
+  --out, -o PATH             Destination file (prints to stdout if omitted)
+
+Examples:
+  recon-x export --scan-id RX-001 --type burp-scope --out burp.json
+  recon-x export --scan-id RX-001 --type hosts --out hosts.txt
+  recon-x export --scan-id RX-001 --type urls --out urls.txt
+  recon-x export --scan-id RX-001 --type nuclei-targets --out nuclei_targets.txt
+
+
+================================================================================
+8. INTEGRITY AUDIT & QUALITY METRICS
+================================================================================
+
+--------------------------------------------------------------------------------
+COMMAND: audit
+Description: Cryptographically audits the tamper-evident SHA-256 hash chain in 
+             `request_log` and verifies that zero out-of-scope requests reached 
+             the network and rate-limit compliance was upheld.
+Syntax:
+  recon-x audit <scan_id>
+
+Example:
+  recon-x audit RX-001
+
+--------------------------------------------------------------------------------
+COMMAND: metrics
+Description: Evaluates Section 13 Quality Assurance and Performance Scorecard:
+             - Scope violations over the wire (Target: 0)
+             - Rate-limit breaches (Target: 0)
+             - Duplicate asset percentage (Target: 0.0%)
+             - Requests per asset (Target: <= 3.0)
+             - False-positive rate
+             - Scan completion rate
+Syntax:
+  recon-x metrics <scan_id>
+
+Example:
+  recon-x metrics RX-001
+
+
+================================================================================
+9. EXIT CODES REFERENCE
+================================================================================
+
+RECON-X uses standardized POSIX exit codes suitable for automated scripting, CI/CD, 
+and cron jobs:
+
+  Code 0: Success / Finished cleanly.
+  Code 1: General error or unhandled exception.
+  Code 2: Scan paused by target rate limiting (429/503) or network backoff.
+  Code 3: Scan halted because the request budget was exhausted (--max-requests).
+  Code 4: Scope or configuration validation error (e.g. target denied by scope).
+
+================================================================================
+END OF REFERENCE MANUAL
+================================================================================
