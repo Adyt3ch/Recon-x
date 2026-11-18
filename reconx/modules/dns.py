@@ -54,15 +54,23 @@ class DnsModule:
 
     async def run(self, ctx: ScanContext, task: Task) -> DnsResult:
         """Resolve DNS records for target asset and check security observations."""
-        hostname = task.target
+        raw_target = task.target
+        hostname = raw_target.split(":")[0] if ":" in raw_target else raw_target
         result = DnsResult(hostname=hostname)
 
-        # 1. Fetch asset_id from database
+        # 1. Fetch asset_id from database (try raw_target first, then hostname)
         cursor = ctx.db.execute(
             "SELECT id, confidence FROM assets WHERE program = ? AND hostname = ?",
-            (ctx.program, hostname),
+            (ctx.program, raw_target),
         )
         asset_row = cursor.fetchone()
+        if not asset_row and raw_target != hostname:
+            cursor = ctx.db.execute(
+                "SELECT id, confidence FROM assets WHERE program = ? AND hostname = ?",
+                (ctx.program, hostname),
+            )
+            asset_row = cursor.fetchone()
+
         asset_id = asset_row["id"] if asset_row else None
         current_conf = asset_row["confidence"] if asset_row else "low"
 
@@ -162,6 +170,8 @@ class DnsModule:
         # 9. Update asset confidence: resolved in-scope -> high
         if asset_id and resolved_ips and not result.is_wildcard:
             new_conf = upgrade_confidence(current_conf, "high")
-            upsert_asset(ctx.db, ctx.program, hostname, confidence=new_conf)
+            upsert_asset(ctx.db, ctx.program, raw_target, confidence=new_conf)
+            if raw_target != hostname:
+                upsert_asset(ctx.db, ctx.program, hostname, confidence=new_conf)
 
         return result

@@ -1,0 +1,20 @@
+program: lab
+authorized_by: "Local lab containers that I run myself"
+in_scope:
+  domains:
+    - localhost
+    - 127.0.0.1
+  ips:
+    - 127.0.0.1
+  web_ports:
+    - 3000
+    - 8080
+    - 8888
+out_of_scope:
+  domains: []
+  ips: []
+  cidrs: []
+rules:
+  allow_port_scan: false
+  allow_nuclei: false
+  max_requests: 300

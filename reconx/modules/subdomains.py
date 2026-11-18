@@ -65,11 +65,14 @@ class SubdomainsModule:
 
     async def run(self, ctx: ScanContext, task: Task) -> list[DiscoveredHost]:
         """Perform passive reconnaissance on task.target domain."""
-        domain = task.target
-        all_hosts: list[DiscoveredHost] = []
+        raw_target = task.target
+        base_domain = raw_target.split(":")[0] if ":" in raw_target else raw_target
+        all_hosts: list[DiscoveredHost] = [
+            DiscoveredHost(hostname=raw_target, sources=["seed"])
+        ]
 
         # 1. crt.sh Query via passive_get (never touches target budget)
-        crtsh_url = f"https://crt.sh/?q=%.{domain}&output=json"
+        crtsh_url = f"https://crt.sh/?q=%.{base_domain}&output=json"
         try:
             resp = await ctx.requests.passive_get(crtsh_url)
             if resp.status_code == 200 and resp.content:
@@ -82,7 +85,7 @@ class SubdomainsModule:
                 except Exception:
                     pass
         except Exception as e:
-            insert_scan_event(ctx.db, ctx.scan_id, "WARN", f"crt.sh lookup error for {domain}: {e}")
+            insert_scan_event(ctx.db, ctx.scan_id, "WARN", f"crt.sh lookup error for {base_domain}: {e}")
 
         # 2. Subfinder CLI discovery
         runner = self.tool_runner or ToolRunner(scan_id=ctx.scan_id, db_path=ctx.settings.storage.database)
@@ -91,7 +94,7 @@ class SubdomainsModule:
         sub_timeout = ctx.settings.external_tools.subfinder.timeout or 300
 
         sub_hosts, warn = subfinder.discover(
-            domain=domain,
+            domain=base_domain,
             rate_limit=sub_limit,
             timeout=sub_timeout,
         )

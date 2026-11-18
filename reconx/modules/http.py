@@ -70,10 +70,17 @@ class HttpModule:
             (ctx.program,),
         )
         hosts = [row[0] for row in cursor.fetchall()]
-        # 2-3 requests planned per asset (HTTPS, fallback, soft-404)
+        planned_targets: list[str] = []
+        for h in hosts:
+            planned_targets.append(h)
+            if ":" not in h and ctx.scope.web_ports:
+                for port in sorted(ctx.scope.web_ports):
+                    if port not in (80, 443):
+                        planned_targets.append(f"{h}:{port}")
+
         return [
-            Task(scan_id=ctx.scan_id, module=self.name, target=h, estimated_requests=2)
-            for h in hosts
+            Task(scan_id=ctx.scan_id, module=self.name, target=t, estimated_requests=2)
+            for t in planned_targets
         ]
 
     async def _probe_soft_404(self, ctx: ScanContext, host: str, base_scheme: str) -> str | None:
@@ -102,10 +109,20 @@ class HttpModule:
             (ctx.program, host),
         )
         asset_row = cursor.fetchone()
+        if not asset_row and ":" in host:
+            h_only = host.split(":")[0]
+            cursor = ctx.db.execute(
+                "SELECT id, confidence FROM assets WHERE program = ? AND hostname = ?",
+                (ctx.program, h_only),
+            )
+            asset_row = cursor.fetchone()
+
         if not asset_row:
-            return None
-        asset_id = asset_row["id"]
-        current_conf = asset_row["confidence"]
+            asset_id = upsert_asset(ctx.db, ctx.program, host, confidence="low")
+            current_conf = "low"
+        else:
+            asset_id = asset_row["id"]
+            current_conf = asset_row["confidence"]
 
         # 1. Probe HTTPS first
         https_url = f"https://{host}/"
