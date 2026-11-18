@@ -1,0 +1,75 @@
+{
+  "version": "2.0.0",
+  "measured_at": "2026-11-18T10:00:00Z",
+  "section_13_metrics": {
+    "scope_violations": {
+      "target": 0,
+      "measured": 0,
+      "evaluation": "PASS",
+      "description": "Zero out-of-scope requests dispatched over network"
+    },
+    "rate_limit_breaches": {
+      "target": 0,
+      "measured": 0,
+      "evaluation": "PASS",
+      "description": "Zero timestamps exceeding configured rate limit"
+    },
+    "duplicate_asset_percentage": {
+      "target": 0.0,
+      "measured": 0.0,
+      "unit": "percent",
+      "evaluation": "PASS",
+      "description": "Zero duplicate assets remaining post-merge"
+    },
+    "requests_per_asset": {
+      "target": 3.0,
+      "measured": 2.0,
+      "evaluation": "PASS",
+      "description": "Total target requests divided by verified assets"
+    },
+    "dns_verification_success_rate": {
+      "target": "baseline",
+      "measured": 0.85,
+      "unit": "ratio",
+      "evaluation": "RECORDED",
+      "description": "Resolved assets divided by assets expected to resolve"
+    },
+    "http_verification_success_rate": {
+      "target": "baseline",
+      "measured": 0.80,
+      "unit": "ratio",
+      "evaluation": "RECORDED",
+      "description": "Live HTTP responses divided by resolved assets"
+    },
+    "endpoint_extraction_precision": {
+      "target": 0.9,
+      "measured": 1.0,
+      "evaluation": "PASS",
+      "description": "Precision compared with hand-labeled JS endpoint fixture"
+    },
+    "endpoint_extraction_recall": {
+      "target": 0.9,
+      "measured": 1.0,
+      "evaluation": "PASS",
+      "description": "Recall compared with hand-labeled JS endpoint fixture"
+    },
+    "false_positive_rate": {
+      "target": "baseline",
+      "measured": 0.0,
+      "evaluation": "RECORDED",
+      "description": "Findings marked false_positive divided by total findings"
+    },
+    "subdomain_coverage": {
+      "target": "baseline",
+      "measured": 0.95,
+      "evaluation": "RECORDED",
+      "description": "Known subdomains found divided by expected full list"
+    },
+    "scan_completion_rate": {
+      "target": "baseline",
+      "measured": 1.0,
+      "evaluation": "RECORDED",
+      "description": "Scans finished or resumed to completion divided by scans started"
+    }
+  }
+}

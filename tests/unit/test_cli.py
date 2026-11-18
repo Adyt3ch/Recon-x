@@ -101,3 +101,21 @@ def test_cli_status(tmp_path, monkeypatch):
     res = runner.invoke(app, ["status"])
     assert res.exit_code == 0
     assert "No scans recorded" in res.stdout
+
+
+def test_cli_audit_and_metrics_cmd(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    runner.invoke(app, ["init"])
+
+    # Audit a non-existent or fresh scan
+    audit_res = runner.invoke(app, ["audit", "RX-001"])
+    assert audit_res.exit_code == 0
+    assert "Cryptographic Audit" in audit_res.stdout
+    assert "Scope violations over wire" in audit_res.stdout
+
+    # Metrics command
+    metrics_res = runner.invoke(app, ["metrics", "RX-001"])
+    assert metrics_res.exit_code == 0
+    assert "Section 13 Metrics Evaluation" in metrics_res.stdout
+    assert "Scope Violations" in metrics_res.stdout
+    assert "Rate-limit Breaches" in metrics_res.stdout

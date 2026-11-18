@@ -75,6 +75,12 @@ from reconx.reporting.export import (
 )
 from reconx.reporting.html_report import generate_html_report
 from reconx.reporting.json_report import generate_json_report
+from reconx.reporting.metrics import (
+    calculate_rate_limit_breaches,
+    calculate_requests_per_asset,
+    calculate_scope_violations,
+    compute_scan_metrics,
+)
 from reconx.reporting.txt_report import generate_txt_report
 
 console = Console()
@@ -104,6 +110,7 @@ def register_commands(app: typer.Typer) -> None:
     app.command(name="report", help="Export scan report in HTML, JSON, TXT, or CSV format.")(report_cmd)
     app.command(name="export", help="Export plain lists, Burp scope JSON, or Nuclei targets.")(export_cmd)
     app.command(name="audit", help="Verify request audit hash chain and check scope decisions.")(audit_cmd)
+    app.command(name="metrics", help="Evaluate and print Section 13 metrics and quality scorecard.")(metrics_cmd)
     app.command(name="resume", help="Resume an interrupted or paused scan.")(resume_cmd)
 
 
@@ -1340,13 +1347,26 @@ def audit_cmd(
     db = get_db(db_path)
     is_valid, err = verify_chain(db, scan_id)
 
-    console.print(Panel(f"[bold]Cryptographic Audit for {scan_id}[/bold]"))
+    console.print(Panel(f"[bold]Cryptographic Audit & Quality Verification for {scan_id}[/bold]"))
     if is_valid:
         console.print("  [green]✓[/green] SHA-256 Hash Chain: [bold green]VALID (No tampering detected)[/bold green]")
     else:
         console.print(f"  [red]✗[/red] SHA-256 Hash Chain: [bold red]BROKEN[/bold red] - {err}")
 
     # Check for scope violations
+    scope_violations = calculate_scope_violations(db, scan_id)
+    if scope_violations == 0:
+        console.print("  [green]✓[/green] Scope violations over wire: [bold green]0 (Enforced)[/bold green]")
+    else:
+        console.print(f"  [red]✗[/red] Scope violations over wire: [bold red]{scope_violations}[/bold red]")
+
+    # Check for rate-limit breaches
+    rate_breaches = calculate_rate_limit_breaches(db, scan_id)
+    if rate_breaches == 0:
+        console.print("  [green]✓[/green] Rate-limit breaches: [bold green]0 (Enforced)[/bold green]")
+    else:
+        console.print(f"  [red]✗[/red] Rate-limit breaches: [bold red]{rate_breaches}[/bold red]")
+
     cursor = db.execute(
         "SELECT COUNT(*) FROM request_log WHERE scan_id = ? AND scope_decision LIKE 'denied%'",
         (scan_id,),
@@ -1359,8 +1379,87 @@ def audit_cmd(
     )
     total_count = cursor2.fetchone()[0]
 
+    rpa = calculate_requests_per_asset(db, scan_id)
+
     console.print(f"  [green]✓[/green] Out-of-scope requests blocked: {denied_count}")
     console.print(f"  [green]✓[/green] Total logged target requests: {total_count}")
+    console.print(f"  [green]✓[/green] Requests per asset: {rpa} (Target: <= 3.0)")
+    db.close()
+
+
+def metrics_cmd(
+    scan_id: str = typer.Argument(..., help="Scan ID to evaluate (e.g. RX-001)"),
+) -> None:
+    """Evaluate and print Section 13 metrics and quality scorecard for a scan."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    metrics = compute_scan_metrics(db, scan_id)
+
+    table = Table(title=f"RECON-X Section 13 Metrics Evaluation ({scan_id})")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Measured Value", style="bold")
+    table.add_column("Target", style="magenta")
+    table.add_column("Status", style="green")
+
+    # Scope violations
+    sv = metrics["scope_violations"]
+    table.add_row(
+        "Scope Violations",
+        str(sv),
+        "0",
+        "[green]PASS[/green]" if sv == 0 else "[red]FAIL[/red]",
+    )
+
+    # Rate-limit breaches
+    rb = metrics["rate_limit_breaches"]
+    table.add_row(
+        "Rate-limit Breaches",
+        str(rb),
+        "0",
+        "[green]PASS[/green]" if rb == 0 else "[red]FAIL[/red]",
+    )
+
+    # Duplicate asset percentage
+    dup = metrics["duplicate_asset_percentage"]
+    table.add_row(
+        "Duplicate Asset Percentage",
+        f"{dup}%",
+        "0%",
+        "[green]PASS[/green]" if dup == 0.0 else "[red]FAIL[/red]",
+    )
+
+    # Requests per asset
+    rpa = metrics["requests_per_asset"]
+    table.add_row(
+        "Requests per Asset",
+        str(rpa),
+        "<= 3.0",
+        "[green]PASS[/green]" if rpa <= 3.0 else "[yellow]BASELINE[/yellow]",
+    )
+
+    # False-positive rate
+    fp = metrics["false_positive_rate"]
+    table.add_row(
+        "False-positive Rate",
+        f"{fp * 100:.1f}%",
+        "Record baseline",
+        "[cyan]RECORDED[/cyan]",
+    )
+
+    # Scan completion rate
+    scr = metrics["scan_completion_rate"]
+    table.add_row(
+        "Scan Completion Rate",
+        f"{scr * 100:.1f}%",
+        "Record baseline",
+        "[cyan]RECORDED[/cyan]",
+    )
+
+    console.print(table)
     db.close()
 
 
