@@ -67,6 +67,13 @@ from reconx.modules.subdomains import SubdomainsModule
 from reconx.modules.urls import UrlsModule
 from reconx.modules.vulnerability_intel import VulnerabilityIntelModule
 from reconx.reporting.csv_report import generate_csv_report
+from reconx.reporting.export import (
+    export_burp_scope,
+    export_hosts,
+    export_nuclei_targets,
+    export_urls,
+)
+from reconx.reporting.html_report import generate_html_report
 from reconx.reporting.json_report import generate_json_report
 from reconx.reporting.txt_report import generate_txt_report
 
@@ -94,7 +101,8 @@ def register_commands(app: typer.Typer) -> None:
     app.command(name="monitor", help="Run monitoring scan, verify new assets, and alert on changes.")(monitor_cmd)
     app.command(name="leads", help="List prioritized investigative leads ranked by heuristic score.")(leads_cmd)
     app.command(name="results", help="View results of a completed or paused scan.")(results_cmd)
-    app.command(name="report", help="Export scan report in JSON, TXT, or CSV format.")(report_cmd)
+    app.command(name="report", help="Export scan report in HTML, JSON, TXT, or CSV format.")(report_cmd)
+    app.command(name="export", help="Export plain lists, Burp scope JSON, or Nuclei targets.")(export_cmd)
     app.command(name="audit", help="Verify request audit hash chain and check scope decisions.")(audit_cmd)
     app.command(name="resume", help="Resume an interrupted or paused scan.")(resume_cmd)
 
@@ -1250,7 +1258,13 @@ def report_cmd(
         return
 
     fmt = format_type.lower()
-    if fmt == "json":
+    if fmt == "html":
+        html_data = generate_html_report(db, scan_id)
+        out_file = target_dir / "report.html"
+        out_file.write_text(html_data, encoding="utf-8")
+        console.print(f"[bold green]Generated HTML report:[/bold green] {out_file}")
+
+    elif fmt == "json":
         data = generate_json_report(db, scan_id)
         out_file = target_dir / "report.json"
         out_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -1274,6 +1288,44 @@ def report_cmd(
         raise typer.Exit(code=1)
 
     db.close()
+
+
+def export_cmd(
+    scan_id: str = typer.Option(..., "--scan-id", "-s", help="Scan ID to export data for"),
+    export_type: str = typer.Option(..., "--type", "-t", help="Export type: hosts | urls | burp-scope | nuclei-targets"),
+    out_file: Path | None = typer.Option(None, "--out", "-o", help="Output file (prints to console if omitted)"),
+) -> None:
+    """Export plain lists, Burp Suite scope configurations, or Nuclei targets."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    t = export_type.lower()
+    try:
+        if t == "hosts":
+            content = export_hosts(db, scan_id)
+        elif t == "urls":
+            content = export_urls(db, scan_id)
+        elif t == "nuclei-targets":
+            content = export_nuclei_targets(db, scan_id)
+        elif t == "burp-scope":
+            data = export_burp_scope(db, scan_id)
+            content = json.dumps(data, indent=2)
+        else:
+            console.print(f"[bold red]Unknown export type: {export_type}. Choose hosts | urls | burp-scope | nuclei-targets[/bold red]")
+            db.close()
+            raise typer.Exit(code=1)
+    finally:
+        db.close()
+
+    if out_file:
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text(content, encoding="utf-8")
+        console.print(f"[bold green]Exported {t} to:[/bold green] {out_file}")
+    else:
+        console.print(content)
 
 
 def audit_cmd(
