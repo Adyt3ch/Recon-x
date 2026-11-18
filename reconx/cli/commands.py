@@ -38,7 +38,16 @@ from reconx.database.storage import (
     generate_scan_id,
     get_db,
     get_scan,
+    insert_scan_event,
     list_scans,
+)
+from reconx.integrations.nuclei import NucleiRunner
+from reconx.intelligence.correlation import (
+    add_manual_note,
+    calculate_leads,
+    list_findings,
+    render_finding_hackerone_report,
+    update_finding_status,
 )
 from reconx.intelligence.history import (
     diff_scans,
@@ -53,17 +62,21 @@ from reconx.modules.fingerprint import FingerprintModule
 from reconx.modules.http import HttpModule
 from reconx.modules.javascript import JavascriptModule
 from reconx.modules.misconfiguration import MisconfigurationModule
+from reconx.modules.ports import PortsModule
 from reconx.modules.subdomains import SubdomainsModule
 from reconx.modules.urls import UrlsModule
+from reconx.modules.vulnerability_intel import VulnerabilityIntelModule
 from reconx.reporting.csv_report import generate_csv_report
 from reconx.reporting.json_report import generate_json_report
 from reconx.reporting.txt_report import generate_txt_report
 
 console = Console()
 
-# Scope subcommand group
+# Subcommand groups
 scope_app = typer.Typer(help="Manage and verify scan scope rules.")
 config_app = typer.Typer(help="Manage and display configuration.")
+findings_app = typer.Typer(help="Manage findings, status transitions, and triage workflow.")
+notes_app = typer.Typer(help="Manage manual assessment notes on assets or findings.")
 
 
 def register_commands(app: typer.Typer) -> None:
@@ -71,12 +84,15 @@ def register_commands(app: typer.Typer) -> None:
     app.command(name="init", help="Initialize folders, configuration files, and SQLite database.")(init_cmd)
     app.add_typer(scope_app, name="scope")
     app.add_typer(config_app, name="config")
+    app.add_typer(findings_app, name="findings")
+    app.add_typer(notes_app, name="notes")
     app.command(name="doctor", help="Check dependencies, database, and external tools on PATH.")(doctor_cmd)
     app.command(name="status", help="List scans and their execution status.")(status_cmd)
     app.command(name="passive", help="Passive subdomain discovery with zero target traffic.")(passive_cmd)
     app.command(name="scan", help="Run full reconnaissance pipeline (passive -> DNS -> HTTP).")(scan_cmd)
     app.command(name="diff", help="Calculate deep structural diff between two historical scans.")(diff_cmd)
     app.command(name="monitor", help="Run monitoring scan, verify new assets, and alert on changes.")(monitor_cmd)
+    app.command(name="leads", help="List prioritized investigative leads ranked by heuristic score.")(leads_cmd)
     app.command(name="results", help="View results of a completed or paused scan.")(results_cmd)
     app.command(name="report", help="Export scan report in JSON, TXT, or CSV format.")(report_cmd)
     app.command(name="audit", help="Verify request audit hash chain and check scope decisions.")(audit_cmd)
@@ -686,6 +702,8 @@ def scan_cmd(
         FingerprintModule(),
         TakeoverModule(),
         MisconfigurationModule(),
+        VulnerabilityIntelModule(),
+        PortsModule(),
     ]
     engine = ScanEngine(modules)
 
@@ -745,6 +763,39 @@ def scan_cmd(
         misconfig_tasks = engine.modules["misconfiguration"].plan(ctx)
         if misconfig_tasks:
             await engine.run_scan(ctx, tasks=misconfig_tasks)
+
+        # Phase 9: Vulnerability intelligence (NVD & CISA KEV)
+        vuln_tasks = engine.modules["vulnerability_intel"].plan(ctx)
+        if vuln_tasks:
+            await engine.run_scan(ctx, tasks=vuln_tasks)
+
+        # Phase 10: Port scanning (strictly off by default, runs only when scope allows)
+        if getattr(scope_cfg.rules, "allow_port_scan", False):
+            port_tasks = engine.modules["ports"].plan(ctx)
+            if port_tasks:
+                await engine.run_scan(ctx, tasks=port_tasks)
+
+        # Phase 11: Nuclei automated checks (strictly off by default, runs only when scope allows)
+        if getattr(scope_cfg.rules, "allow_nuclei", False):
+            h_cursor = db.execute(
+                "SELECT DISTINCT url FROM http_services h JOIN assets a ON h.asset_id = a.id WHERE a.program = ?",
+                (scope_cfg.program,),
+            )
+            live_urls = [r[0] for r in h_cursor.fetchall()]
+            if live_urls:
+                try:
+                    runner = NucleiRunner(
+                        rate_limit=settings.external_tools.nuclei.rate_limit or 1,
+                        timeout=settings.external_tools.nuclei.timeout,
+                    )
+                    runner.run(
+                        targets=live_urls,
+                        allow_nuclei=True,
+                        scan_id=scan_id,
+                        db=db,
+                    )
+                except Exception as e:
+                    insert_scan_event(db, scan_id, "WARN", f"Nuclei scan error: {e}")
 
         # Save snapshot for history and diffing
         save_scan_snapshot(db, scan_id)
@@ -946,6 +997,128 @@ def monitor_cmd(
         db.close()
 
 
+def leads_cmd(
+    scan_id: str = typer.Argument(..., help="Scan ID to score and rank leads for"),
+    top: int = typer.Option(20, "--top", "-t", help="Number of top-ranked leads to display"),
+) -> None:
+    """List prioritized investigative leads ranked by heuristic score."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    leads = calculate_leads(db, scan_id)
+    db.close()
+
+    if not leads:
+        console.print(f"[cyan]No leads identified for scan {scan_id}.[/cyan]")
+        return
+
+    table = Table(title=f"Top {min(top, len(leads))} Investigative Leads for {scan_id}")
+    table.add_column("Rank", style="bold")
+    table.add_column("Target", style="cyan")
+    table.add_column("Score", style="bold green", justify="right")
+    table.add_column("Suggested Manual Test", style="yellow")
+    table.add_column("Reasons")
+
+    for idx, lead in enumerate(leads[:top], 1):
+        reasons_text = "\n".join(f"• {r}" for r in lead.reasons[:3])
+        if len(lead.reasons) > 3:
+            reasons_text += f"\n  (+ {len(lead.reasons) - 3} more)"
+        table.add_row(
+            str(idx),
+            lead.target,
+            str(lead.score),
+            lead.suggested_test or "-",
+            reasons_text,
+        )
+    console.print(table)
+
+
+@findings_app.command(name="list")
+def findings_list_cmd(
+    scan_id: str | None = typer.Option(None, "--scan-id", "-s", help="Scan ID filter"),
+    status: str | None = typer.Option(None, "--status", help="Status filter: new, confirmed, false_positive, reported, duplicate, fixed"),
+) -> None:
+    """List recorded observations and findings with lifecycle status."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    findings = list_findings(db, scan_id=scan_id, status=status)
+    db.close()
+
+    if not findings:
+        console.print("[cyan]No findings matching criteria.[/cyan]")
+        return
+
+    table = Table(title="Findings & Observations")
+    table.add_column("ID", style="bold cyan")
+    table.add_column("Target", style="blue")
+    table.add_column("Title")
+    table.add_column("Severity", style="magenta")
+    table.add_column("Status", style="bold")
+    table.add_column("Confidence", style="green")
+
+    for f in findings:
+        st = f["status"]
+        st_style = "green" if st == "confirmed" else "yellow" if st == "new" else "dim"
+        table.add_row(
+            f["id"],
+            f.get("hostname") or "-",
+            f["title"][:50],
+            f["severity_hint"],
+            f"[{st_style}]{st}[/{st_style}]",
+            f["confidence"],
+        )
+    console.print(table)
+
+
+@findings_app.command(name="set")
+def findings_set_cmd(
+    finding_id: str = typer.Argument(..., help="Finding ID (e.g. F-TAKEOVER-12345)"),
+    status: str = typer.Option(..., "--status", help="New status: confirmed, false_positive, reported, duplicate, fixed"),
+    note: str | None = typer.Option(None, "--note", "-n", help="Triage or verification note"),
+) -> None:
+    """Transition finding status (enforces lifecycle state machine: new -> confirmed/false_positive/duplicate -> reported -> fixed)."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    try:
+        update_finding_status(db, finding_id, status.lower(), note=note)
+        console.print(f"[bold green]Updated finding {finding_id} status to '{status}'.[/bold green]")
+    except ValueError as e:
+        console.print(f"[bold red]Transition error:[/bold red] {e}")
+        db.close()
+        raise typer.Exit(code=1)
+    finally:
+        db.close()
+
+
+@notes_app.command(name="add")
+def notes_add_cmd(
+    entity_type: str = typer.Option(..., "--entity-type", "-t", help="Entity type: asset | finding"),
+    entity_id: str = typer.Option(..., "--entity-id", "-i", help="Entity ID (hostname or finding ID)"),
+    body: str = typer.Option(..., "--body", "-b", help="Manual assessment note text"),
+) -> None:
+    """Record manual notes against an asset or finding."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    note_id = add_manual_note(db, entity_type, entity_id, body)
+    db.close()
+    console.print(f"[bold green]Added note #{note_id} to {entity_type} '{entity_id}'.[/bold green]")
+
+
 def results_cmd(
     scan_id: str = typer.Argument(..., help="Scan ID (e.g. RX-001)"),
 ) -> None:
@@ -1044,6 +1217,8 @@ def report_cmd(
     scan_id: str = typer.Option(..., "--scan-id", "-s", help="Scan ID to generate report for"),
     format_type: str = typer.Option("json", "--format", "-f", help="Format: json | txt | csv"),
     output_dir: Path = typer.Option(Path("reports"), "--out", "-o", help="Reports output folder"),
+    finding_id: str | None = typer.Option(None, "--finding", help="Specific finding ID to export as vulnerability submission"),
+    template: str | None = typer.Option(None, "--template", help="Submission template: hackerone"),
 ) -> None:
     """Export assessment report for submission or client review."""
     db_path = Path("data/reconx.db")
@@ -1054,6 +1229,25 @@ def report_cmd(
     db = get_db(db_path)
     target_dir = output_dir / scan_id
     target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check for single-finding HackerOne submission export
+    if template and template.lower() == "hackerone":
+        if not finding_id:
+            console.print("[bold red]--finding <id> is required when using --template hackerone.[/bold red]")
+            db.close()
+            raise typer.Exit(code=1)
+        try:
+            h1_md = render_finding_hackerone_report(db, finding_id)
+            out_file = target_dir / f"{finding_id}_hackerone.md"
+            out_file.write_text(h1_md, encoding="utf-8")
+            console.print(f"[bold green]Generated HackerOne submission report:[/bold green] {out_file}")
+        except ValueError as e:
+            console.print(f"[bold red]Template error:[/bold red] {e}")
+            db.close()
+            raise typer.Exit(code=1)
+        finally:
+            db.close()
+        return
 
     fmt = format_type.lower()
     if fmt == "json":

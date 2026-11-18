@@ -1,3 +1,52 @@
-weights:
+# RECON-X Priority Scoring Configuration
+# Weights assigned to signals, interesting keywords, parameters, and findings
+
+names:
   dev: 10
+  staging: 10
+  uat: 10
+  test: 8
+  old: 10
+  beta: 8
+  preprod: 10
   admin: 15
+  internal: 12
+  corp: 10
+  vpn: 15
+  portal: 10
+
+endpoints:
+  login: 15
+  admin: 20
+  upload: 20
+  graphql: 15
+  docs: 10
+  api: 8
+  auth: 15
+  oauth: 15
+
+parameters:
+  redirect: 15
+  next: 15
+  url: 15
+  return: 15
+  file: 20
+  path: 20
+  template: 15
+  id: 10
+  user_id: 12
+  account: 12
+  callback: 15
+  webhook: 15
+  uri: 15
+
+findings:
+  takeover_candidate: 30
+  cors_misconfig: 25
+  secret_candidate: 25
+  exposure: 30
+  outdated_version: 15
+  directory_listing: 15
+  missing_hsts: 5
+  missing_csp: 5
+  missing_cookie_flag: 5

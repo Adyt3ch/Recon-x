@@ -1,1 +1,15 @@
-mappings: {}
+# Mapping of detected technology names to CPE 2.3 identifiers
+mappings:
+  nginx: "cpe:2.3:a:f5:nginx"
+  apache: "cpe:2.3:a:apache:http_server"
+  wordpress: "cpe:2.3:a:wordpress:wordpress"
+  openssl: "cpe:2.3:a:openssl:openssl"
+  php: "cpe:2.3:a:php:php"
+  jquery: "cpe:2.3:a:jquery:jquery"
+  express: "cpe:2.3:a:expressjs:express"
+  drupal: "cpe:2.3:a:drupal:drupal"
+  joomla: "cpe:2.3:a:joomla:joomla"
+  tomcat: "cpe:2.3:a:apache:tomcat"
+  grafana: "cpe:2.3:a:grafana:grafana"
+  kibana: "cpe:2.3:a:elastic:kibana"
+  spring: "cpe:2.3:a:vmware:spring_framework"

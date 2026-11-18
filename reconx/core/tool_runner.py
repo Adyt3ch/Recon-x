@@ -11,6 +11,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from reconx.database.storage import get_db, utc_now_iso
 
@@ -45,6 +46,7 @@ REQUIRED_RATE_FLAGS = {
     "katana": ["-rl", "-rate-limit"],
     "naabu": ["-rate", "-r"],
     "nuclei": ["-rl", "-rate-limit"],
+    "nmap": ["--max-rate"],
 }
 
 
@@ -153,6 +155,25 @@ class ToolRunner:
             exit_code=exit_code,
             duration_ms=duration_ms,
         )
+
+
+def run_tool(
+    tool_name: str,
+    args: list[str],
+    target: str | None = None,
+    timeout: int = 300,
+    scan_id: str | None = None,
+    db: Any = None,
+    binary_override: str | None = None,
+) -> ToolResult:
+    """Convenience function to execute external CLI tool through ToolRunner."""
+    runner = ToolRunner(scan_id=scan_id)
+    return runner.run(
+        tool=tool_name,
+        args=args,
+        target=target,
+        timeout=timeout,
+    )
 
 
 def check_tool_version(tool: str) -> str | None:

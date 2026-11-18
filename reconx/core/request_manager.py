@@ -79,6 +79,7 @@ class RequestManager:
         sleep_func: Callable[[float], Coroutine[Any, Any, None]] | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
         proxy: str | None = None,
+        auth_profile: Any | None = None,
     ):
         self.scan_id = scan_id
         self.scope_engine = scope_engine
@@ -89,6 +90,7 @@ class RequestManager:
         self.sleep_func = sleep_func or asyncio.sleep
         self.transport = transport
         self.proxy = proxy
+        self.auth_profile = auth_profile
 
         # Request budget tracking
         self.requests_used = 0
@@ -131,6 +133,18 @@ class RequestManager:
         req_headers = dict(self.settings.program.extra_headers)
         if headers:
             req_headers.update(headers)
+
+        # Host-specific authenticated crawling: attach credentials ONLY to listed hosts
+        if self.auth_profile:
+            parsed_host = urllib.parse.urlsplit(norm_url).hostname or ""
+            allowed_hosts = getattr(self.auth_profile, "hosts", [])
+            if any(h.lower() == parsed_host.lower() for h in allowed_hosts):
+                auth_hdrs = getattr(self.auth_profile, "headers", {})
+                req_headers.update(auth_hdrs)
+                auth_cookies = getattr(self.auth_profile, "cookies", {})
+                if auth_cookies:
+                    cookie_str = "; ".join(f"{k}={v}" for k, v in auth_cookies.items())
+                    req_headers["Cookie"] = cookie_str
 
         req = client.build_request(
             method=method,

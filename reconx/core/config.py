@@ -143,6 +143,12 @@ class NotificationsConfig(BaseModel):
     telegram: TelegramNotificationConfig = Field(default_factory=TelegramNotificationConfig)
 
 
+class AuthProfileConfig(BaseModel):
+    hosts: list[str] = Field(default_factory=list)
+    headers: dict[str, str] = Field(default_factory=dict)
+    cookies: dict[str, str] = Field(default_factory=dict)
+
+
 class Settings(BaseModel):
     profile: ProfileType = ProfileType.CAUTIOUS
     program: ProgramConfig = Field(default_factory=ProgramConfig)
@@ -150,6 +156,7 @@ class Settings(BaseModel):
     external_tools: ExternalToolsConfig = Field(default_factory=ExternalToolsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    auth_profiles: dict[str, AuthProfileConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_profile_rules(self) -> Settings:
