@@ -40,10 +40,19 @@ from reconx.database.storage import (
     get_scan,
     list_scans,
 )
+from reconx.intelligence.history import (
+    diff_scans,
+    format_alert_message,
+    has_changes,
+    save_scan_snapshot,
+    send_monitor_alert,
+)
+from reconx.intelligence.takeover import TakeoverModule
 from reconx.modules.dns import DnsModule
 from reconx.modules.fingerprint import FingerprintModule
 from reconx.modules.http import HttpModule
 from reconx.modules.javascript import JavascriptModule
+from reconx.modules.misconfiguration import MisconfigurationModule
 from reconx.modules.subdomains import SubdomainsModule
 from reconx.modules.urls import UrlsModule
 from reconx.reporting.csv_report import generate_csv_report
@@ -66,6 +75,8 @@ def register_commands(app: typer.Typer) -> None:
     app.command(name="status", help="List scans and their execution status.")(status_cmd)
     app.command(name="passive", help="Passive subdomain discovery with zero target traffic.")(passive_cmd)
     app.command(name="scan", help="Run full reconnaissance pipeline (passive -> DNS -> HTTP).")(scan_cmd)
+    app.command(name="diff", help="Calculate deep structural diff between two historical scans.")(diff_cmd)
+    app.command(name="monitor", help="Run monitoring scan, verify new assets, and alert on changes.")(monitor_cmd)
     app.command(name="results", help="View results of a completed or paused scan.")(results_cmd)
     app.command(name="report", help="Export scan report in JSON, TXT, or CSV format.")(report_cmd)
     app.command(name="audit", help="Verify request audit hash chain and check scope decisions.")(audit_cmd)
@@ -673,6 +684,8 @@ def scan_cmd(
         UrlsModule(),
         JavascriptModule(),
         FingerprintModule(),
+        TakeoverModule(),
+        MisconfigurationModule(),
     ]
     engine = ScanEngine(modules)
 
@@ -723,11 +736,212 @@ def scan_cmd(
         if fp_tasks:
             await engine.run_scan(ctx, tasks=fp_tasks)
 
+        # Phase 7: Subdomain takeover checks
+        to_tasks = engine.modules["takeover"].plan(ctx)
+        if to_tasks:
+            await engine.run_scan(ctx, tasks=to_tasks)
+
+        # Phase 8: Security misconfiguration and exposure probes
+        misconfig_tasks = engine.modules["misconfiguration"].plan(ctx)
+        if misconfig_tasks:
+            await engine.run_scan(ctx, tasks=misconfig_tasks)
+
+        # Save snapshot for history and diffing
+        save_scan_snapshot(db, scan_id)
+
     try:
         asyncio.run(_execute())
         console.print(f"[bold green]Scan {scan_id} finished successfully.[/bold green]")
     except KeyboardInterrupt:
         console.print(f"[yellow]Scan {scan_id} interrupted by user. State saved as stopped.[/yellow]")
+    finally:
+        db.close()
+
+
+def diff_cmd(
+    scan_id_old: str = typer.Argument(..., help="Baseline scan ID (e.g. RX-001)"),
+    scan_id_new: str = typer.Argument(..., help="Newer scan ID (e.g. RX-002)"),
+    as_json: bool = typer.Option(False, "--json", help="Output differences as JSON"),
+) -> None:
+    """Calculate and display structural differences between two scans."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        console.print("[red]Database not found.[/red]")
+        raise typer.Exit(code=1)
+
+    db = get_db(db_path)
+    try:
+        diff = diff_scans(db, scan_id_old, scan_id_new)
+    except Exception as e:
+        console.print(f"[bold red]Diff error:[/bold red] {e}")
+        db.close()
+        raise typer.Exit(code=1)
+    finally:
+        db.close()
+
+    if as_json:
+        console.print(json.dumps(diff, indent=2))
+        return
+
+    console.print(Panel(f"[bold cyan]Scan Diff: {scan_id_old} ➔ {scan_id_new}[/bold cyan]"))
+
+    if not has_changes(diff):
+        console.print("[green]No differences detected between the two scans.[/green]")
+        return
+
+    # Added / removed assets
+    if diff["added_assets"]:
+        console.print(f"[bold green]+ Added Assets ({len(diff['added_assets'])}):[/bold green]")
+        for a in diff["added_assets"]:
+            console.print(f"  [green]+ {a}[/green]")
+
+    if diff["removed_assets"]:
+        console.print(f"[bold red]- Removed Assets ({len(diff['removed_assets'])}):[/bold red]")
+        for a in diff["removed_assets"]:
+            console.print(f"  [red]- {a}[/red]")
+
+    # DNS changes
+    if diff["dns_changes"]:
+        console.print(f"\n[bold yellow]DNS Record Changes ({len(diff['dns_changes'])}):[/bold yellow]")
+        for d in diff["dns_changes"]:
+            console.print(f"  • {d['hostname']}: changed")
+
+    # Service changes
+    if diff["service_changes"]:
+        console.print(f"\n[bold blue]Service Changes ({len(diff['service_changes'])}):[/bold blue]")
+        for s in diff["service_changes"]:
+            console.print(f"  • {s['url']} ({s['change']})")
+
+    # Technology changes
+    if diff["technology_changes"]:
+        console.print(f"\n[bold magenta]Technology Changes ({len(diff['technology_changes'])}):[/bold magenta]")
+        for t in diff["technology_changes"]:
+            console.print(f"  • {t['hostname']}: {t['old']} ➔ {t['new']}")
+
+    # Endpoints
+    if diff["new_endpoints"]:
+        console.print(f"\n[bold cyan]New Endpoints ({len(diff['new_endpoints'])}):[/bold cyan]")
+        for ep in diff["new_endpoints"]:
+            console.print(f"  • {ep}")
+
+    # JavaScript changes
+    if diff["changed_js_files"]:
+        console.print(f"\n[bold orange3]Changed JavaScript Files ({len(diff['changed_js_files'])}):[/bold orange3]")
+        for j in diff["changed_js_files"]:
+            console.print(f"  • {j['url']}")
+
+
+def monitor_cmd(
+    target: str = typer.Argument(..., help="Domain to monitor"),
+    profile: str = typer.Option("cautious", "--profile", "-p", help="Scan profile: cautious | normal"),
+    scope_path: Path = typer.Option(Path("config/scope.yaml"), "--scope", "-s", help="Scope file"),
+    settings_path: Path = typer.Option(Path("config/settings.yaml"), "--settings", help="Settings file"),
+    budget: int = typer.Option(50, "--budget", "-b", help="Max requests budget for verifying new assets"),
+    webhook_url: str | None = typer.Option(None, "--webhook-url", help="Webhook URL for notifications"),
+) -> None:
+    """Run monitoring scan: discover subdomains, verify only new assets, snapshot and alert on changes."""
+    db_path = Path("data/reconx.db")
+    if not db_path.exists():
+        init_cmd()
+
+    db = get_db(db_path)
+    scope_cfg = load_scope(scope_path)
+    scope_engine = ScopeEngine(scope_cfg)
+    target_clean = target.strip()
+
+    if not scope_engine.check(target_clean).allowed:
+        console.print(f"[bold red]Target {target} is out of scope in {scope_path}[/bold red]")
+        db.close()
+        raise typer.Exit(code=4)
+
+    # Find the most recent previous scan for this program
+    cursor = db.execute(
+        "SELECT id FROM scans WHERE program = ? ORDER BY id DESC LIMIT 1",
+        (scope_cfg.program,),
+    )
+    last_scan_row = cursor.fetchone()
+    previous_scan_id = last_scan_row[0] if last_scan_row else None
+
+    # Load settings with budget override
+    settings = load_settings(
+        settings_path=settings_path,
+        profile_override=profile,
+        cli_overrides={"max_requests": budget},
+    )
+
+    new_scan_id = generate_scan_id(db)
+    create_scan(
+        db=db,
+        scan_id=new_scan_id,
+        program=scope_cfg.program,
+        profile=settings.profile.value,
+        request_budget=budget,
+    )
+
+    rate_limiter = AsyncRateLimiter(
+        requests_per_second=settings.request_control.global_rate.requests_per_second,
+        requests_per_minute=settings.request_control.global_rate.requests_per_minute,
+        per_host_rps=settings.request_control.per_host.requests_per_second,
+        per_host_rpm=settings.request_control.per_host.requests_per_minute,
+        min_delay=settings.request_control.delay.minimum,
+        max_delay=settings.request_control.delay.maximum,
+    )
+    req_mgr = RequestManager(
+        scan_id=new_scan_id,
+        scope_engine=scope_engine,
+        settings=settings,
+        db=db,
+        rate_limiter=rate_limiter,
+    )
+    ctx = ScanContext(
+        scan_id=new_scan_id,
+        program=scope_cfg.program,
+        settings=settings,
+        scope=scope_engine,
+        requests=req_mgr,
+        db=db,
+    )
+
+    sub_mod = SubdomainsModule()
+    dns_mod = DnsModule()
+    http_mod = HttpModule()
+
+    engine = ScanEngine([sub_mod, dns_mod, http_mod])
+
+    console.print(f"[bold cyan]Running monitor scan {new_scan_id} for {target} (baseline: {previous_scan_id or 'none'})...[/bold cyan]")
+
+    async def _run_monitor():
+        # Step 1: Passive discovery (0 target requests)
+        sub_task = Task(scan_id=new_scan_id, module="subdomains", target=target_clean)
+        await sub_mod.run(ctx, sub_task)
+
+        # Step 2: Verify DNS & HTTP
+        dns_tasks = dns_mod.plan(ctx)
+        if dns_tasks:
+            await engine.run_scan(ctx, tasks=dns_tasks)
+
+        http_tasks = http_mod.plan(ctx)
+        if http_tasks:
+            await engine.run_scan(ctx, tasks=http_tasks)
+
+        # Step 3: Save snapshot of current scan
+        save_scan_snapshot(db, new_scan_id)
+
+        # Step 4: Diff against baseline if baseline exists
+        if previous_scan_id and previous_scan_id != new_scan_id:
+            diff = diff_scans(db, previous_scan_id, new_scan_id)
+            if has_changes(diff):
+                console.print(Panel(format_alert_message(diff), title="🚨 Changes Detected"))
+                sent = await send_monitor_alert(diff, req_mgr, webhook_url=webhook_url)
+                if sent:
+                    console.print("[green]Alert sent to webhook notification channel.[/green]")
+            else:
+                console.print("[green]Target unchanged. No new assets or modifications found.[/green]")
+        else:
+            console.print(f"[green]Initial baseline snapshot recorded for {new_scan_id}.[/green]")
+
+    try:
+        asyncio.run(_run_monitor())
     finally:
         db.close()
 
@@ -804,6 +1018,26 @@ def results_cmd(
                 u["source"],
             )
         console.print(urls_table)
+
+    # Findings & Security Observations table
+    if data.get("findings"):
+        findings_table = Table(title="Security Observations & Findings")
+        findings_table.add_column("ID", style="cyan")
+        findings_table.add_column("Hostname", style="blue")
+        findings_table.add_column("Type", style="yellow")
+        findings_table.add_column("Title", style="bold")
+        findings_table.add_column("Severity", style="magenta")
+        findings_table.add_column("Confidence", style="green")
+        for f in data["findings"]:
+            findings_table.add_row(
+                f["id"],
+                f.get("hostname") or "-",
+                f["type"],
+                f["title"],
+                f["severity_hint"],
+                f["confidence"],
+            )
+        console.print(findings_table)
 
 
 def report_cmd(

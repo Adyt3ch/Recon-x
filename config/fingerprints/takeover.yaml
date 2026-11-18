@@ -1,1 +1,73 @@
-providers: []
+providers:
+  - name: "GitHub Pages"
+    cname:
+      - "github.io"
+    fingerprints:
+      - "There isn't a GitHub Pages site here."
+      - "For root URLs (like http://example.com/) you must provide an index.html file"
+    status: "vulnerable"
+
+  - name: "AWS S3"
+    cname:
+      - "s3.amazonaws.com"
+      - "s3-website"
+      - "s3.dualstack"
+    fingerprints:
+      - "The specified bucket does not exist"
+      - "NoSuchBucket"
+    status: "vulnerable"
+
+  - name: "Heroku"
+    cname:
+      - "herokuapp.com"
+      - "herokudns.com"
+    fingerprints:
+      - "No such app"
+      - "Heroku | No such app"
+      - "<title>No such app</title>"
+    status: "vulnerable"
+
+  - name: "Azure Traffic Manager / Web App"
+    cname:
+      - "azurewebsites.net"
+      - "cloudapp.net"
+      - "trafficmanager.net"
+    fingerprints:
+      - "404 Web Site not found"
+      - "Web Site not found."
+    status: "vulnerable"
+
+  - name: "Fastly"
+    cname:
+      - "fastly.net"
+    fingerprints:
+      - "Fastly error: unknown domain"
+    status: "vulnerable"
+
+  - name: "Ghost"
+    cname:
+      - "ghost.io"
+    fingerprints:
+      - "The thing you were looking for is no longer here"
+    status: "vulnerable"
+
+  - name: "Shopify"
+    cname:
+      - "myshopify.com"
+    fingerprints:
+      - "Sorry, this shop is currently unavailable"
+    status: "vulnerable"
+
+  - name: "Tumblr"
+    cname:
+      - "domains.tumblr.com"
+    fingerprints:
+      - "Whatever you were looking for doesn't seem to exist at this URL."
+    status: "vulnerable"
+
+  - name: "WordPress.com"
+    cname:
+      - "wordpress.com"
+    fingerprints:
+      - "Do you want to register"
+    status: "vulnerable"

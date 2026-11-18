@@ -415,3 +415,19 @@ class RequestManager:
             return []
         except Exception:
             return []
+
+    async def send_webhook(self, url: str, payload: dict[str, Any]) -> bool:
+        """Send notification webhook (Slack, Discord, Telegram) without consuming scan budget."""
+        client_kwargs: dict[str, Any] = {
+            "headers": {"Content-Type": "application/json", "User-Agent": "RECON-X/0.1 notifier"},
+            "timeout": httpx.Timeout(10.0),
+        }
+        if self.transport:
+            client_kwargs["transport"] = self.transport
+
+        try:
+            async with httpx.AsyncClient(**client_kwargs) as client:
+                resp = await client.post(url, json=payload)
+                return resp.status_code in (200, 201, 204)
+        except Exception:
+            return False
