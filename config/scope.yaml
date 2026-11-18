@@ -1,0 +1,23 @@
+program: example-program
+authorized_by: Program policy saved
+in_scope:
+  domains:
+  - example.com
+  - '*.example.com'
+  cidrs: []
+  ips: []
+  web_ports:
+  - 80
+  - 443
+  - 8080
+  - 8443
+out_of_scope:
+  domains:
+  - mail.example.com
+  - '*.internal.example.com'
+  cidrs: []
+  ips: []
+rules:
+  allow_port_scan: false
+  allow_nuclei: false
+  max_requests: 1000

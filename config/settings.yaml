@@ -1,0 +1,43 @@
+# RECON-X Settings
+profile: cautious            # cautious | normal | program-custom
+
+program:
+  name: example-program
+  policy_url: "https://example.com/security"
+  user_agent: "RECON-X/0.1 (authorized security assessment)"
+  extra_headers:
+    X-Bug-Bounty: "researcher-handle"
+
+request_control:
+  concurrency: 1
+  global:   { requests_per_second: 1, requests_per_minute: 30 }
+  per_host: { requests_per_second: 1, requests_per_minute: 30 }
+  delay:    { minimum: 1, maximum: 2 }
+  budget:   { max_requests: 1000 }
+  timeouts: { connect: 5, read: 10 }
+  limits:   { max_response_bytes: 2000000, max_redirects: 3 }
+  retry:    { max_attempts: 1, respect_retry_after: true }
+  backoff:  { enabled: true, initial_delay: 30, maximum_delay: 300 }
+  protection:
+    pause_on_429: true
+    pause_on_503: true
+    pause_on_repeated_errors: true
+    repeated_error_threshold: 5
+    preserve_results_on_stop: true
+
+external_tools:
+  subfinder: { path: auto, rate_limit: 10, timeout: 300 }
+  katana:    { path: auto, rate_limit: 1, depth: 2, timeout: 600 }
+  naabu:     { path: auto, rate: 100, enabled: false }
+  nuclei:    { path: auto, rate_limit: 1, enabled: false }
+
+storage:
+  database: data/reconx.db
+  reports_dir: reports
+  logs_dir: logs
+
+notifications:
+  telegram:
+    enabled: false
+    token_env: RECONX_TELEGRAM_TOKEN
+    chat_id_env: RECONX_TELEGRAM_CHAT

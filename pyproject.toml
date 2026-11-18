@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "recon-x"
+version = "0.1.0"
+description = "Lightweight, CLI-only, modular reconnaissance framework for authorized bug bounty and VAPT work."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "typer>=0.12",
+  "httpx>=0.27",
+  "dnspython>=2.6",
+  "beautifulsoup4>=4.12",
+  "pydantic>=2.7",
+  "PyYAML>=6.0",
+  "rich>=13.7",
+  "Jinja2>=3.1",
+  "idna>=3.7",
+  "defusedxml>=0.7",
+]
+
+[project.scripts]
+recon-x = "reconx.main:app"
+
+[tool.setuptools.packages.find]
+include = ["reconx*"]
+
+[tool.setuptools.package-data]
+reconx = ["reporting/templates/*.j2", "database/migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+markers = [
+  "integration: uses the local mock server",
+  "tools: needs external tools on PATH (Kali)",
+  "lab: needs Docker lab targets running",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+ignore = ["B008", "E501"]
